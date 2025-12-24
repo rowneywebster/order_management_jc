@@ -1,0 +1,273 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import axios from 'axios';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import Layout from '../../components/Layout';
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+export default function NewOrderPage() {
+  const [websites, setWebsites] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [formData, setFormData] = useState({
+    website_id: '',
+    product_id: '',
+    product_name: '',
+    customer_name: '',
+    phone: '',
+    alt_phone: '',
+    email: '',
+    county: '',
+    location: '',
+    pieces: 1,
+    status: 'pending',
+    notes: ''
+  });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    Promise.all([
+      axios.get(`${API_URL}/api/websites`),
+      axios.get(`${API_URL}/api/products`),
+    ])
+    .then(([websitesRes, productsRes]) => {
+      setWebsites(websitesRes.data);
+      setProducts(productsRes.data);
+      if (websitesRes.data.length > 0) {
+        setFormData(prev => ({ ...prev, website_id: websitesRes.data[0].id }));
+      }
+      if (productsRes.data.length > 0) {
+        setFormData(prev => ({ 
+          ...prev, 
+          product_id: productsRes.data[0].id,
+          product_name: productsRes.data[0].name,
+        }));
+      }
+    })
+    .catch(err => {
+      console.error('Error fetching data:', err);
+      setError('Failed to load data. Please try again.');
+    })
+    .finally(() => setLoading(false));
+  }, []);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'product_id') {
+      const selectedProduct = products.find(p => p.id === value);
+      setFormData(prev => ({ 
+        ...prev, 
+        product_id: value,
+        product_name: selectedProduct ? selectedProduct.name : ''
+      }));
+    } else {
+      setFormData(prev => ({ ...prev, [name]: value }));
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+
+    try {
+      await axios.post(`${API_URL}/api/orders`, formData);
+      alert('Order created successfully!');
+      router.push('/');
+    } catch (err) {
+      console.error('Error creating order:', err);
+      setError(err.response?.data?.error || 'Failed to create order. Please check the fields and try again.');
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Layout title="Add New Order">
+        <div className="bg-white rounded-lg shadow p-8">
+          <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Website */}
+            <div className="md:col-span-2">
+              <label htmlFor="website_id" className="block text-sm font-medium text-gray-700">Website</label>
+              <select
+                id="website_id"
+                name="website_id"
+                value={formData.website_id}
+                onChange={handleChange}
+                required
+                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+              >
+                {websites.map(w => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Product Dropdown */}
+            <div>
+              <label htmlFor="product_id" className="block text-sm font-medium text-gray-700">Product</label>
+              <select
+                id="product_id"
+                name="product_id"
+                value={formData.product_id}
+                onChange={handleChange}
+                required
+                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+              >
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Customer Name */}
+            <div>
+              <label htmlFor="customer_name" className="block text-sm font-medium text-gray-700">Customer Name</label>
+              <input
+                type="text"
+                id="customer_name"
+                name="customer_name"
+                value={formData.customer_name}
+                onChange={handleChange}
+                required
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Phone */}
+            <div>
+              <label htmlFor="phone" className="block text-sm font-medium text-gray-700">Phone Number</label>
+              <input
+                type="tel"
+                id="phone"
+                name="phone"
+                value={formData.phone}
+                onChange={handleChange}
+                required
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Alt Phone */}
+            <div>
+              <label htmlFor="alt_phone" className="block text-sm font-medium text-gray-700">Alternative Phone</label>
+              <input
+                type="tel"
+                id="alt_phone"
+                name="alt_phone"
+                value={formData.alt_phone}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Email */}
+            <div className="md:col-span-2">
+              <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email</label>
+              <input
+                type="email"
+                id="email"
+                name="email"
+                value={formData.email}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* County */}
+            <div>
+              <label htmlFor="county" className="block text-sm font-medium text-gray-700">County</label>
+              <input
+                type="text"
+                id="county"
+                name="county"
+                value={formData.county}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Location */}
+            <div>
+              <label htmlFor="location" className="block text-sm font-medium text-gray-700">Location Details</label>
+              <input
+                type="text"
+                id="location"
+                name="location"
+                value={formData.location}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Pieces */}
+            <div>
+              <label htmlFor="pieces" className="block text-sm font-medium text-gray-700">Pieces</label>
+              <input
+                type="number"
+                id="pieces"
+                name="pieces"
+                value={formData.pieces}
+                onChange={handleChange}
+                min="1"
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+
+            {/* Status */}
+            <div>
+              <label htmlFor="status" className="block text-sm font-medium text-gray-700">Status</label>
+              <select
+                id="status"
+                name="status"
+                value={formData.status}
+                onChange={handleChange}
+                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+              >
+                <option>pending</option>
+                <option>approved</option>
+                <option>cancelled</option>
+                <option>rescheduled</option>
+                <option>completed</option>
+              </select>
+            </div>
+
+            {/* Notes */}
+            <div className="md:col-span-2">
+              <label htmlFor="notes" className="block text-sm font-medium text-gray-700">Notes</label>
+              <textarea
+                id="notes"
+                name="notes"
+                rows="3"
+                value={formData.notes}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:ring-blue-500 focus:border-blue-500"
+              ></textarea>
+            </div>
+
+            {error && (
+              <div className="md:col-span-2 text-red-600 text-sm">
+                {error}
+              </div>
+            )}
+
+            <div className="md:col-span-2 flex justify-end gap-4">
+              <Link href="/" className="bg-gray-200 text-gray-700 px-6 py-2 rounded-md hover:bg-gray-300">
+                Cancel
+              </Link>
+              <button
+                type="submit"
+                disabled={loading}
+                className="bg-blue-600 text-white px-6 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? 'Saving...' : 'Save Order'}
+              </button>
+            </div>
+          </form>
+        </div>
+    </Layout>
+  );
+}
