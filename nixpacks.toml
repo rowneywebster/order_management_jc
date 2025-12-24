@@ -1,0 +1,13 @@
+# Root-level Nixpacks configuration for Order Management System
+# This file helps Nixpacks detect the Node.js backend application
+
+baseDirectory = "backend"
+
+[phases.setup]
+nixPkgs = ["nodejs_22"]
+
+[phases.build]
+cmd = "npm install"
+
+[start]
+cmd = "npm start"
