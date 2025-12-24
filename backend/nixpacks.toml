@@ -1,3 +1,5 @@
+baseDirectory = "backend"
+
 [phases.setup]
 nixPkgs = ["nodejs_22"]
 
