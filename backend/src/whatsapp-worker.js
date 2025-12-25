@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import Redis from 'ioredis';
 import pkg from 'whatsapp-web.js';
 import qrcode from 'qrcode-terminal';
+import express from 'express';
 
 const { Client, LocalAuth } = pkg;
 
@@ -126,3 +127,15 @@ worker.on('failed', (job, err) => {
 });
 
 console.log('🔄 WhatsApp notification worker started');
+
+// Health check server
+const app = express();
+const HEALTH_CHECK_PORT = process.env.HEALTH_CHECK_PORT || 3000; // Use 3000 as per Coolify config
+
+app.get('/health', (req, res) => {
+    res.status(200).json({ status: 'ok', worker: 'whatsapp' });
+});
+
+app.listen(HEALTH_CHECK_PORT, () => {
+    console.log(`✅ WhatsApp Worker Health Check server listening on port ${HEALTH_CHECK_PORT}`);
+});
