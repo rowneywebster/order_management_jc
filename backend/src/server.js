@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import pkg from 'pg';
-import { Queue, Worker } from 'bullmq';
+import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 
 dotenv.config();
@@ -20,12 +20,13 @@ const pool = new Pool({
     password: process.env.DB_PASSWORD,
 });
 
-// Redis connection for queue
-const redis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    maxRetriesPerRequest: null,
-});
+// Redis connection for queue - UPDATED TO USE REDIS_URL
+const redis = new Redis(
+    process.env.REDIS_URL || 'redis://localhost:6379',
+    {
+        maxRetriesPerRequest: null,
+    }
+);
 
 // WhatsApp Queue
 const whatsappQueue = new Queue('whatsapp-notifications', { connection: redis });
@@ -71,7 +72,7 @@ app.post('/api/webhook/:webhook_key', async (req, res) => {
                 orderData.county,
                 orderData.location,
                 orderData.pieces || 1,
-                orderData.courier || 'Rowney' // Default to 'Rowney' if not provided
+                orderData.courier || 'Rowney'
             ]
         );
 
@@ -111,25 +112,25 @@ app.get('/api/orders', async (req, res) => {
         let paramCount = 1;
 
         if (status) {
-            query += ` AND o.status = ${paramCount}`;
+            query += ` AND o.status = $${paramCount}`;
             params.push(status);
             paramCount++;
         }
 
         if (date_from) {
-            query += ` AND o.created_at >= ${paramCount}`;
+            query += ` AND o.created_at >= $${paramCount}`;
             params.push(date_from);
             paramCount++;
         }
 
         if (date_to) {
-            query += ` AND o.created_at <= ${paramCount}`;
+            query += ` AND o.created_at <= $${paramCount}`;
             params.push(date_to);
             paramCount++;
         }
 
         if (website_id) {
-            query += ` AND o.website_id = ${paramCount}`;
+            query += ` AND o.website_id = $${paramCount}`;
             params.push(website_id);
             paramCount++;
         }
@@ -149,7 +150,6 @@ app.post('/api/orders', async (req, res) => {
     try {
         const orderData = req.body;
 
-        // Basic validation
         if (!orderData.website_id || !orderData.customer_name || !orderData.phone || !orderData.product_name) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
@@ -175,17 +175,15 @@ app.post('/api/orders', async (req, res) => {
                 orderData.pieces || 1,
                 orderData.status || 'pending',
                 orderData.notes,
-                orderData.courier // Add courier field
+                orderData.courier
             ]
         );
 
         const order = result.rows[0];
 
-        // Fetch website name for notification
         const websiteResult = await pool.query('SELECT name FROM websites WHERE id = $1', [order.website_id]);
         const websiteName = websiteResult.rows.length > 0 ? websiteResult.rows[0].name : 'N/A';
 
-        // Queue WhatsApp notification
         await whatsappQueue.add('send-order-notification', {
             order,
             website: websiteName
@@ -202,7 +200,6 @@ app.post('/api/orders', async (req, res) => {
         res.status(500).json({ error: 'Failed to create order' });
     }
 });
-
 
 // Get order statistics
 app.get('/api/orders/stats', async (req, res) => {
@@ -275,42 +272,42 @@ app.patch('/api/orders/:id', async (req, res) => {
         let paramCount = 1;
 
         if (status) {
-            query += `, status = ${paramCount}`;
+            query += `, status = $${paramCount}`;
             params.push(status);
             paramCount++;
         }
 
         if (rescheduled_date) {
-            query += `, rescheduled_date = ${paramCount}`;
+            query += `, rescheduled_date = $${paramCount}`;
             params.push(rescheduled_date);
             paramCount++;
         }
 
         if (notes !== undefined) {
-            query += `, notes = ${paramCount}`;
+            query += `, notes = $${paramCount}`;
             params.push(notes);
             paramCount++;
         }
 
         if (amount_kes !== undefined) {
-            query += `, amount_kes = ${paramCount}`;
+            query += `, amount_kes = $${paramCount}`;
             params.push(amount_kes);
             paramCount++;
         }
 
         if (product_id !== undefined) {
-            query += `, product_id = ${paramCount}`;
+            query += `, product_id = $${paramCount}`;
             params.push(product_id);
             paramCount++;
         }
 
         if (courier !== undefined) {
-            query += `, courier = ${paramCount}`;
+            query += `, courier = $${paramCount}`;
             params.push(courier);
             paramCount++;
         }
 
-        query += ` WHERE id = ${paramCount} RETURNING *`;
+        query += ` WHERE id = $${paramCount} RETURNING *`;
         params.push(id);
 
         const result = await pool.query(query, params);
@@ -322,7 +319,6 @@ app.patch('/api/orders/:id', async (req, res) => {
         res.json(result.rows[0]);
     } catch (error) {
         console.error('Update order error:', error);
-        console.error('Error details:', error.message, error.stack); // Added detailed error logging
         res.status(500).json({ error: 'Failed to update order', details: error.message });
     }
 });
@@ -363,7 +359,6 @@ app.put('/api/orders/:id', async (req, res) => {
 });
 
 // ==================== WEBSITES API ====================
-// Get all websites
 app.get('/api/websites', async (req, res) => {
     try {
         const result = await pool.query(`
@@ -381,7 +376,6 @@ app.get('/api/websites', async (req, res) => {
     }
 });
 
-// Add new website
 app.post('/api/websites', async (req, res) => {
     try {
         const { name, contact_email, contact_phone, website_url } = req.body;
@@ -390,7 +384,6 @@ app.post('/api/websites', async (req, res) => {
             return res.status(400).json({ error: 'Website name is required' });
         }
 
-        // Generate unique webhook key
         const webhook_key = `wh_${Math.random().toString(36).substring(2, 15)}${Date.now().toString(36)}`;
 
         const result = await pool.query(
@@ -406,7 +399,6 @@ app.post('/api/websites', async (req, res) => {
     }
 });
 
-// Toggle website active status
 app.patch('/api/websites/:id/toggle', async (req, res) => {
     try {
         const { id } = req.params;
@@ -427,7 +419,6 @@ app.patch('/api/websites/:id/toggle', async (req, res) => {
 });
 
 // ==================== PRODUCTS API ====================
-// Get all products
 app.get('/api/products', async (req, res) => {
     try {
         const result = await pool.query('SELECT p.*, COALESCE(i.quantity, 0) as quantity FROM products p LEFT JOIN inventory i ON p.id = i.product_id ORDER BY p.created_at DESC');
@@ -438,7 +429,6 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-// Add new product
 app.post('/api/products', async (req, res) => {
     try {
         const { name, sku, description } = req.body;
@@ -452,14 +442,13 @@ app.post('/api/products', async (req, res) => {
         res.status(201).json(result.rows[0]);
     } catch (error) {
         console.error('Add product error:', error);
-        if (error.code === '23505') { // unique_violation
+        if (error.code === '23505') {
             return res.status(409).json({ error: 'A product with this name or SKU already exists.' });
         }
         res.status(500).json({ error: 'Failed to add product' });
     }
 });
 
-// Update product
 app.put('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -481,7 +470,6 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-// Delete product
 app.delete('/api/products/:id', async (req, res) => {
     try {
         const { id } = req.params;
@@ -497,7 +485,6 @@ app.delete('/api/products/:id', async (req, res) => {
 });
 
 // ==================== STOCK PURCHASES API ====================
-// Get all stock purchases
 app.get('/api/stock-purchases', async (req, res) => {
     try {
         const result = await pool.query(`
@@ -513,7 +500,6 @@ app.get('/api/stock-purchases', async (req, res) => {
     }
 });
 
-// Add new stock purchase
 app.post('/api/stock-purchases', async (req, res) => {
     try {
         const { product_id, quantity, cost_per_item_kes, supplier_name, purchase_date, notes } = req.body;
@@ -538,7 +524,6 @@ app.post('/api/stock-purchases', async (req, res) => {
 });
 
 // ==================== EXPENSES API ====================
-// Get all expense categories
 app.get('/api/expense-categories', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM expense_categories ORDER BY name');
@@ -549,7 +534,6 @@ app.get('/api/expense-categories', async (req, res) => {
     }
 });
 
-// Get all expenses
 app.get('/api/expenses', async (req, res) => {
     try {
         const result = await pool.query(`
@@ -565,7 +549,6 @@ app.get('/api/expenses', async (req, res) => {
     }
 });
 
-// Add new expense
 app.post('/api/expenses', async (req, res) => {
     try {
         const { category_id, description, amount_kes, expense_date } = req.body;

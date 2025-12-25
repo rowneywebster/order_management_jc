@@ -9,13 +9,13 @@ const { Client, LocalAuth } = pkg;
 // Admin WhatsApp numbers
 const ADMIN_NUMBERS = ['+254720809823', '+254726884643'];
 
-// Redis connection
-const redis = new Redis({
-    host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379,
-    password: process.env.REDIS_PASSWORD,
-    maxRetriesPerRequest: null,
-});
+// Redis connection - UPDATED TO USE REDIS_URL
+const redis = new Redis(
+    process.env.REDIS_URL || 'redis://localhost:6379',
+    {
+        maxRetriesPerRequest: null,
+    }
+);
 
 // Initialize WhatsApp client
 const client = new Client({
@@ -131,7 +131,7 @@ console.log('🔄 WhatsApp notification worker started');
 
 // Health check server
 const app = express();
-const HEALTH_CHECK_PORT = process.env.HEALTH_CHECK_PORT || 3000; // Use 3000 as per Coolify config
+const HEALTH_CHECK_PORT = process.env.HEALTH_CHECK_PORT || 3000;
 
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'ok', worker: 'whatsapp' });
