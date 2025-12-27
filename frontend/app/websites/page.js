@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -64,15 +65,18 @@ export default function Websites() {
 
   if (loading) {
     return (
+      <ProtectedRoute allowedRoles={['admin']}>
       <Layout title="Websites">
         <div className="flex items-center justify-center">
           <div className="text-xl">Loading...</div>
         </div>
       </Layout>
+      </ProtectedRoute>
     );
   }
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Websites">
         {/* Add Website Button */}
         <div className="mb-6">
@@ -224,5 +228,6 @@ export default function Websites() {
           ))}
         </div>
     </Layout>
+    </ProtectedRoute>
   );
 }

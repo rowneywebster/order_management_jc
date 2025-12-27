@@ -8,6 +8,10 @@ const { Client, LocalAuth } = pkg;
 
 // Admin WhatsApp numbers
 const ADMIN_NUMBERS = ['+254791365400', '+254726884643'];
+const RIDER_NUMBERS = (process.env.RIDER_WHATSAPP_NUMBERS || process.env.RIDER_NUMBERS || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
 
 // Redis connection - UPDATED TO USE REDIS_URL
 const redis = new Redis(
@@ -67,6 +71,18 @@ function formatWhatsAppNumber(phone) {
     return cleaned + '@c.us';
 }
 
+async function sendMessageToRecipients(message, recipients) {
+    for (const rawNumber of recipients) {
+        try {
+            const formattedNumber = formatWhatsAppNumber(rawNumber);
+            await client.sendMessage(formattedNumber, message);
+            console.log(`✅ Notification sent to ${rawNumber}`);
+        } catch (error) {
+            console.error(`❌ Failed to send to ${rawNumber}:`, error.message);
+        }
+    }
+}
+
 // Send order notification to admins
 async function sendOrderNotification(order, websiteName) {
     const message = `
@@ -92,28 +108,70 @@ Address: ${order.location || 'N/A'}
 🔗 View order: ${process.env.DASHBOARD_URL || 'http://localhost:3000'}/orders/${order.id}
     `.trim();
 
-    // Send to all admin numbers
-    for (const adminNumber of ADMIN_NUMBERS) {
-        try {
-            const formattedNumber = formatWhatsAppNumber(adminNumber);
-            await client.sendMessage(formattedNumber, message);
-            console.log(`✅ Notification sent to ${adminNumber}`);
-        } catch (error) {
-            console.error(`❌ Failed to send to ${adminNumber}:`, error.message);
-        }
-    }
+    const recipients = ADMIN_NUMBERS.length > 0 ? ADMIN_NUMBERS : RIDER_NUMBERS;
+    await sendMessageToRecipients(message, recipients);
+}
+
+async function sendNairobiBroadcast(order, dashboardUrl) {
+    // Rider broadcast only includes minimal customer info
+    const message = `
+🛵 *Nairobi Same-Day Order*
+
+👤 Customer: ${order.customer_first_name}
+📍 Address: ${order.address}
+📦 Product: ${order.product}
+💰 Payable to rider: ${order.amount_payable}
+Status: ${order.status}
+
+Claim here: ${dashboardUrl || 'http://localhost:3000'}/nairobi
+    `.trim();
+
+    const recipients = RIDER_NUMBERS.length > 0 ? RIDER_NUMBERS : ADMIN_NUMBERS;
+    const targetList = Array.isArray(order.recipients) && order.recipients.length > 0 ? order.recipients : recipients;
+    if (targetList.length === 0) return;
+    await sendMessageToRecipients(message, targetList);
+}
+
+async function sendNairobiAssignment(order, recipient, dashboardUrl, riderName) {
+    if (!recipient) return;
+    // Assignment includes full customer details, sent only to the verified rider
+    const message = `
+📦 Order Assigned: ${order.product}
+
+👤 Customer: ${order.customer_full_name || order.customer_first_name}
+📞 Phone: ${order.phone || 'N/A'}
+${order.alt_phone ? `📱 Alt: ${order.alt_phone}` : ''}
+📍 Address: ${order.address}
+💰 Payable: ${order.amount_payable}
+Assigned to: ${riderName || 'Rider'}
+
+Dashboard: ${dashboardUrl || 'http://localhost:3000'}/nairobi
+    `.trim();
+
+    await sendMessageToRecipients(message, [recipient]);
 }
 
 // Create worker to process WhatsApp notifications
 const worker = new Worker(
     'whatsapp-notifications',
     async (job) => {
-        const { order, website } = job.data;
-        
-        console.log(`📤 Processing notification for order ${order.id}`);
-        
-        await sendOrderNotification(order, website);
-        
+        const { order, website, recipients, dashboardUrl, recipient, rider_name } = job.data;
+
+        if (job.name === 'broadcast-nairobi-order') {
+            console.log(`📤 Broadcasting Nairobi order ${order.id}`);
+            await sendNairobiBroadcast({ ...order, recipients: recipients || [] }, dashboardUrl);
+            return { success: true, order_id: order.id };
+        }
+
+        if (job.name === 'send-nairobi-assignment') {
+            console.log(`📤 Sending Nairobi assignment for order ${order.id}`);
+            await sendNairobiAssignment(order, recipient, dashboardUrl, rider_name);
+            return { success: true, order_id: order.id };
+        }
+
+        console.log(`📤 Processing admin notification for order ${order.id}`);
+        await sendOrderNotification(order, website, recipients);
+
         return { success: true, order_id: order.id };
     },
     { connection: redis }

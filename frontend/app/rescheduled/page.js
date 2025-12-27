@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -39,15 +40,18 @@ export default function RescheduledOrders() {
 
   if (loading) {
     return (
+      <ProtectedRoute allowedRoles={['admin']}>
       <Layout title="Rescheduled Orders">
         <div className="flex items-center justify-center">
           <div className="text-xl">Loading...</div>
         </div>
       </Layout>
+      </ProtectedRoute>
     );
   }
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Rescheduled Orders">
         {orders.length === 0 ? (
           <div className="bg-white rounded-lg shadow p-8 text-center">
@@ -136,5 +140,6 @@ export default function RescheduledOrders() {
           </div>
         )}
     </Layout>
+    </ProtectedRoute>
   );
 }

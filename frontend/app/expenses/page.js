@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -71,6 +72,7 @@ export default function ExpensesPage() {
   };
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Expenses">
       <div className="mb-6">
         <button
@@ -182,5 +184,6 @@ export default function ExpensesPage() {
         </div>
       )}
     </Layout>
+    </ProtectedRoute>
   );
 }

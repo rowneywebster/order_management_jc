@@ -4,12 +4,22 @@ import dotenv from 'dotenv';
 import pkg from 'pg';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 
 dotenv.config();
 const { Pool } = pkg;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
+
+const NAIROBI_ORDER_STATUSES = new Set(['unassigned', 'assigned', 'delivered']);
+const DEFAULT_RIDERS = (process.env.RIDER_WHATSAPP_NUMBERS || process.env.RIDER_NUMBERS || '')
+    .split(',')
+    .map((n) => n.trim())
+    .filter(Boolean);
 
 // Database connection
 const pool = new Pool({
@@ -33,6 +43,93 @@ const whatsappQueue = new Queue('whatsapp-notifications', { connection: redis })
 
 app.use(cors());
 app.use(express.json());
+
+const toMinimalNairobiPayload = (row) => ({
+    id: row.id,
+    customer_first_name: row.customer_first_name,
+    address: row.address,
+    product: row.product,
+    amount_payable: row.amount_payable,
+    status: row.status,
+    assigned_to: row.assigned_to,
+    assigned_at: row.assigned_at,
+});
+
+const cleanPhone = (value) => (value || '').replace(/\s+/g, '').replace(/[^\d+]/g, '');
+
+async function getActiveRiderPhones() {
+    try {
+        const result = await pool.query('SELECT phone FROM riders WHERE is_active = true');
+        const phones = result.rows.map((r) => r.phone).filter(Boolean);
+        if (phones.length > 0) return phones;
+    } catch (error) {
+        console.error('Failed to fetch riders:', error.message);
+    }
+    return DEFAULT_RIDERS;
+}
+
+const seedUsers = [
+    { email: 'cargojoyful@gmail.com', password: 'T7@wLz#3Qk9', role: 'admin' },
+    { email: 'truphenamukiri@gmail.com', password: 'Laare2030', role: 'user' },
+];
+
+// Hash once at startup so only bcrypt hashes are stored in memory
+const users = seedUsers.map((u) => ({
+    ...u,
+    password: bcrypt.hashSync(u.password, 10),
+}));
+
+const generateToken = (user) =>
+    jwt.sign({ email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+
+function authenticateToken(req, res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader?.split(' ')[1];
+
+    if (!token) return res.status(401).json({ error: 'Authentication required' });
+
+    try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        req.user = payload;
+        next();
+    } catch (error) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+    }
+}
+
+function authorizeRoles(...roles) {
+    return (req, res, next) => {
+        if (!req.user || (roles.length > 0 && !roles.includes(req.user.role))) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        next();
+    };
+}
+
+function optionalAuthenticate(req, _res, next) {
+    const authHeader = req.headers['authorization'];
+    const token = authHeader?.split(' ')[1];
+    if (!token) return next();
+    try {
+        const payload = jwt.verify(token, JWT_SECRET);
+        req.user = payload;
+    } catch (error) {
+        // ignore invalid token for optional paths
+    }
+    next();
+}
+
+function authorizeRolesOrPublic(roles = [], allowPublic = false) {
+    return (req, res, next) => {
+        if (req.user && roles.length > 0 && roles.includes(req.user.role)) {
+            return next();
+        }
+        if (!req.user && allowPublic) {
+            return next();
+        }
+        return res.status(403).json({ error: 'Forbidden' });
+    };
+}
 
 // Helper: resolve product_id using provided identifiers
 async function resolveProductId({ product_id, sku, product_name }) {
@@ -67,6 +164,78 @@ async function getProductName(productId) {
     const result = await pool.query('SELECT name FROM products WHERE id = $1', [productId]);
     return result.rows[0]?.name || null;
 }
+
+// Ensure Nairobi-specific orders table exists (does not affect core inventory)
+async function ensureNairobiOrdersTable() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS nairobi_orders (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            customer_first_name VARCHAR(255) NOT NULL,
+            customer_full_name VARCHAR(255),
+            phone VARCHAR(20),
+            alt_phone VARCHAR(20),
+            address TEXT NOT NULL,
+            product VARCHAR(255) NOT NULL,
+            amount_payable NUMERIC(10, 2) NOT NULL,
+            status VARCHAR(20) NOT NULL DEFAULT 'unassigned',
+            assigned_to VARCHAR(255),
+            assigned_phone VARCHAR(20),
+            assigned_at TIMESTAMP,
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_nairobi_orders_status ON nairobi_orders(status);
+        CREATE INDEX IF NOT EXISTS idx_nairobi_orders_created_at ON nairobi_orders(created_at DESC);
+    `);
+}
+
+ensureNairobiOrdersTable().catch((err) => {
+    console.error('Failed to ensure nairobi_orders table exists:', err);
+});
+
+// Ensure riders table exists (drives WhatsApp notifications list)
+async function ensureRidersTable() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS riders (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            name VARCHAR(255) NOT NULL,
+            phone VARCHAR(20) UNIQUE NOT NULL,
+            is_active BOOLEAN DEFAULT true,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS idx_riders_active ON riders(is_active);
+    `);
+}
+
+ensureRidersTable().catch((err) => {
+    console.error('Failed to ensure riders table exists:', err);
+});
+
+// ==================== AUTH ====================
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+
+        const user = users.find((u) => u.email.toLowerCase() === email.toLowerCase());
+        if (!user) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const valid = await bcrypt.compare(password, user.password);
+        if (!valid) {
+            return res.status(401).json({ error: 'Invalid credentials' });
+        }
+
+        const token = generateToken(user);
+        res.json({ token, email: user.email, role: user.role, expiresIn: JWT_EXPIRES_IN });
+    } catch (error) {
+        console.error('Login error:', error);
+        res.status(500).json({ error: 'Failed to login' });
+    }
+});
 
 // ==================== WEBHOOK ENDPOINT ====================
 app.post('/api/webhook/:webhook_key', async (req, res) => {
@@ -139,7 +308,7 @@ app.post('/api/webhook/:webhook_key', async (req, res) => {
 
 // ==================== ORDERS API ====================
 // Get all orders with filters
-app.get('/api/orders', async (req, res) => {
+app.get('/api/orders', authenticateToken, authorizeRoles('admin', 'user'), async (req, res) => {
     try {
         const { status, date_from, date_to, website_id, search, page, limit, paginated } = req.query;
         const isPaginated = paginated === 'true' || paginated === true;
@@ -157,9 +326,18 @@ app.get('/api/orders', async (req, res) => {
         let paramCount = 1;
 
         if (status) {
-            baseQuery += ` AND o.status = $${paramCount}`;
-            params.push(status);
-            paramCount++;
+            const statusList = Array.isArray(status)
+                ? status
+                : String(status)
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+
+            if (statusList.length > 0) {
+                baseQuery += ` AND o.status = ANY($${paramCount})`;
+                params.push(statusList);
+                paramCount++;
+            }
         }
 
         if (date_from) {
@@ -181,13 +359,15 @@ app.get('/api/orders', async (req, res) => {
         }
 
         if (search) {
+            const normalized = `%${search}%`;
             baseQuery += ` AND (
                 o.customer_name ILIKE $${paramCount} OR 
                 o.phone ILIKE $${paramCount} OR 
                 o.product_name ILIKE $${paramCount} OR
-                o.county ILIKE $${paramCount}
+                o.county ILIKE $${paramCount} OR
+                o.status::text ILIKE $${paramCount}
             )`;
-            params.push(`%${search}%`);
+            params.push(normalized);
             paramCount++;
         }
 
@@ -234,7 +414,7 @@ app.get('/api/orders', async (req, res) => {
 });
 
 // Add new order manually
-app.post('/api/orders', async (req, res) => {
+app.post('/api/orders', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const orderData = req.body;
 
@@ -300,7 +480,7 @@ app.post('/api/orders', async (req, res) => {
 });
 
 // Get order statistics
-app.get('/api/orders/stats', async (req, res) => {
+app.get('/api/orders/stats', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const stats = await pool.query(`
             SELECT 
@@ -356,7 +536,7 @@ app.get('/api/orders/stats', async (req, res) => {
 });
 
 // Monthly performance grouped by calendar month
-app.get('/api/performance/monthly', async (req, res) => {
+app.get('/api/performance/monthly', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
             WITH date_bounds AS (
@@ -377,7 +557,8 @@ app.get('/api/performance/monthly', async (req, res) => {
                 SELECT 
                     date_trunc('month', created_at) AS month_start,
                     COALESCE(SUM(amount_kes) FILTER (WHERE status = 'completed'), 0) AS revenue,
-                    COUNT(*) AS total_orders
+                    COUNT(*) AS total_orders,
+                    COUNT(*) FILTER (WHERE status = 'returned') AS returns
                 FROM orders
                 GROUP BY 1
             ),
@@ -393,7 +574,8 @@ app.get('/api/performance/monthly', async (req, res) => {
                 COALESCE(o.revenue, 0) AS revenue,
                 COALESCE(e.expenses, 0) AS expenses,
                 COALESCE(o.revenue, 0) - COALESCE(e.expenses, 0) AS profit,
-                COALESCE(o.total_orders, 0) AS total_orders
+                COALESCE(o.total_orders, 0) AS total_orders,
+                COALESCE(o.returns, 0) AS returns
             FROM months m
             LEFT JOIN order_totals o ON m.month_start = o.month_start
             LEFT JOIN expense_totals e ON m.month_start = e.month_start
@@ -408,7 +590,7 @@ app.get('/api/performance/monthly', async (req, res) => {
 });
 
 // Get rescheduled orders
-app.get('/api/orders/rescheduled', async (req, res) => {
+app.get('/api/orders/rescheduled', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT o.*, w.name as website_name 
@@ -426,7 +608,7 @@ app.get('/api/orders/rescheduled', async (req, res) => {
 });
 
 // Get a single order by ID
-app.get('/api/orders/:id', async (req, res) => {
+app.get('/api/orders/:id', authenticateToken, authorizeRoles('admin', 'user'), async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
@@ -441,7 +623,7 @@ app.get('/api/orders/:id', async (req, res) => {
 });
 
 // Update order status
-app.patch('/api/orders/:id', async (req, res) => {
+app.patch('/api/orders/:id', authenticateToken, authorizeRoles('admin', 'user'), async (req, res) => {
     try {
         const { id } = req.params;
         const { status, rescheduled_date, notes, amount_kes, product_id, courier, sku, product_name } = req.body;
@@ -526,7 +708,7 @@ app.patch('/api/orders/:id', async (req, res) => {
 });
 
 // Update a full order
-app.put('/api/orders/:id', async (req, res) => {
+app.put('/api/orders/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const {
@@ -571,8 +753,244 @@ app.put('/api/orders/:id', async (req, res) => {
     }
 });
 
+// ==================== NAIROBI SAME-DAY ORDERS ====================
+// Minimal list for riders - avoids exposing full customer details
+app.get('/api/nairobi-orders', optionalAuthenticate, authorizeRolesOrPublic(['admin', 'rider'], true), async (req, res) => {
+    try {
+        const { status } = req.query;
+        let query = `
+            SELECT id, customer_first_name, address, product, amount_payable, status, assigned_to, assigned_at
+            FROM nairobi_orders
+            WHERE 1=1
+        `;
+        const params = [];
+        let paramIndex = 1;
+
+        if (status) {
+            query += ` AND status = ANY($${paramIndex})`;
+            params.push(
+                (Array.isArray(status) ? status : String(status).split(','))
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+            );
+            paramIndex++;
+        }
+
+        query += ' ORDER BY created_at DESC LIMIT 500';
+        const result = await pool.query(query, params);
+        res.json(result.rows.map(toMinimalNairobiPayload));
+    } catch (error) {
+        console.error('Get nairobi orders error:', error);
+        res.status(500).json({ error: 'Failed to fetch Nairobi orders' });
+    }
+});
+
+// Create a Nairobi same-day order (does not touch inventory)
+app.post('/api/nairobi-orders', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+    try {
+        const {
+            customer_first_name,
+            customer_full_name,
+            phone,
+            alt_phone,
+            address,
+            product,
+            amount_payable,
+        } = req.body;
+
+        if (!customer_first_name || !address || !product || amount_payable === undefined) {
+            return res.status(400).json({ error: 'Missing required fields for Nairobi order' });
+        }
+
+        const numericAmount = Number(amount_payable);
+        if (Number.isNaN(numericAmount) || numericAmount < 0) {
+            return res.status(400).json({ error: 'Amount payable must be a positive number' });
+        }
+
+        const insert = await pool.query(
+            `
+            INSERT INTO nairobi_orders (
+                customer_first_name, customer_full_name, phone, alt_phone,
+                address, product, amount_payable, status
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'unassigned')
+            RETURNING *
+        `,
+            [
+                customer_first_name,
+                customer_full_name || customer_first_name,
+                phone ? cleanPhone(phone) : null,
+                alt_phone ? cleanPhone(alt_phone) : null,
+                address,
+                product,
+                numericAmount,
+            ]
+        );
+
+        const order = insert.rows[0];
+
+        // Notify riders (minimal info)
+        const recipients = await getActiveRiderPhones();
+        if (recipients.length > 0) {
+            await whatsappQueue.add('broadcast-nairobi-order', {
+                order: toMinimalNairobiPayload(order),
+                recipients,
+                dashboardUrl: process.env.DASHBOARD_URL || 'http://localhost:3000',
+            });
+        }
+
+        res.status(201).json(toMinimalNairobiPayload(order));
+    } catch (error) {
+        console.error('Create Nairobi order error:', error);
+        res.status(500).json({ error: 'Failed to create Nairobi order' });
+    }
+});
+
+// Rider acceptance and verification
+app.post('/api/nairobi-orders/:id/assign', optionalAuthenticate, authorizeRolesOrPublic(['admin', 'rider'], true), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { rider_phone, rider_name } = req.body;
+
+        if (!rider_phone) {
+            return res.status(400).json({ error: 'Rider phone is required for verification' });
+        }
+
+        const sanitizedPhone = cleanPhone(rider_phone);
+
+        const existing = await pool.query('SELECT * FROM nairobi_orders WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+            return res.status(404).json({ error: 'Nairobi order not found' });
+        }
+        const current = existing.rows[0];
+
+        if (current.status !== 'unassigned') {
+            return res.status(409).json({ error: 'Order is already assigned or delivered' });
+        }
+
+        const updated = await pool.query(
+            `UPDATE nairobi_orders
+             SET status = 'assigned',
+                 assigned_to = COALESCE($1, $2),
+                 assigned_phone = $2,
+                 assigned_at = NOW(),
+                 updated_at = NOW()
+             WHERE id = $3
+             RETURNING *`,
+            [rider_name, sanitizedPhone, id]
+        );
+
+        const order = updated.rows[0];
+
+        await whatsappQueue.add('send-nairobi-assignment', {
+            order,
+            recipient: sanitizedPhone,
+            rider_name: rider_name || sanitizedPhone,
+            dashboardUrl: process.env.DASHBOARD_URL || 'http://localhost:3000',
+        });
+
+        res.json(toMinimalNairobiPayload(order));
+    } catch (error) {
+        console.error('Assign Nairobi order error:', error);
+        res.status(500).json({ error: 'Failed to assign Nairobi order' });
+    }
+});
+
+// Update status (e.g., delivered) without touching inventory
+app.patch('/api/nairobi-orders/:id/status', optionalAuthenticate, authorizeRolesOrPublic(['admin', 'rider'], true), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+
+        if (!status || !NAIROBI_ORDER_STATUSES.has(status)) {
+            return res.status(400).json({ error: 'Invalid Nairobi status' });
+        }
+
+        const existing = await pool.query('SELECT * FROM nairobi_orders WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+            return res.status(404).json({ error: 'Nairobi order not found' });
+        }
+
+        const updated = await pool.query(
+            `UPDATE nairobi_orders
+             SET status = $1,
+                 updated_at = NOW()
+             WHERE id = $2
+             RETURNING *`,
+            [status, id]
+        );
+
+        res.json(toMinimalNairobiPayload(updated.rows[0]));
+    } catch (error) {
+        console.error('Update Nairobi order status error:', error);
+        res.status(500).json({ error: 'Failed to update Nairobi order status' });
+    }
+});
+
+// ==================== RIDERS (manage WhatsApp recipients) ====================
+app.get('/api/riders', authenticateToken, authorizeRoles('admin'), async (_req, res) => {
+    try {
+        const result = await pool.query('SELECT * FROM riders ORDER BY created_at DESC LIMIT 500');
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Get riders error:', error);
+        res.status(500).json({ error: 'Failed to fetch riders' });
+    }
+});
+
+app.post('/api/riders', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+    try {
+        const { name, phone } = req.body;
+        if (!name || !phone) {
+            return res.status(400).json({ error: 'Name and phone are required' });
+        }
+        const cleaned = cleanPhone(phone);
+        const result = await pool.query(
+            'INSERT INTO riders (name, phone, is_active) VALUES ($1, $2, true) RETURNING *',
+            [name, cleaned]
+        );
+        res.status(201).json(result.rows[0]);
+    } catch (error) {
+        console.error('Add rider error:', error);
+        if (error.code === '23505') {
+            return res.status(409).json({ error: 'A rider with this phone already exists.' });
+        }
+        res.status(500).json({ error: 'Failed to add rider' });
+    }
+});
+
+app.patch('/api/riders/:id/toggle', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query(
+            'UPDATE riders SET is_active = NOT is_active WHERE id = $1 RETURNING *',
+            [id]
+        );
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Rider not found' });
+        }
+        res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Toggle rider error:', error);
+        res.status(500).json({ error: 'Failed to toggle rider' });
+    }
+});
+
+app.delete('/api/riders/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await pool.query('DELETE FROM riders WHERE id = $1 RETURNING *', [id]);
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Rider not found' });
+        }
+        res.status(204).send();
+    } catch (error) {
+        console.error('Delete rider error:', error);
+        res.status(500).json({ error: 'Failed to delete rider' });
+    }
+});
+
 // ==================== WEBSITES API ====================
-app.get('/api/websites', async (req, res) => {
+app.get('/api/websites', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT w.*, 
@@ -589,7 +1007,7 @@ app.get('/api/websites', async (req, res) => {
     }
 });
 
-app.post('/api/websites', async (req, res) => {
+app.post('/api/websites', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { name, contact_email, contact_phone, website_url } = req.body;
 
@@ -612,7 +1030,7 @@ app.post('/api/websites', async (req, res) => {
     }
 });
 
-app.patch('/api/websites/:id/toggle', async (req, res) => {
+app.patch('/api/websites/:id/toggle', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query(
@@ -632,7 +1050,7 @@ app.patch('/api/websites/:id/toggle', async (req, res) => {
 });
 
 // ==================== PRODUCTS API ====================
-app.get('/api/products', async (req, res) => {
+app.get('/api/products', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query('SELECT p.*, COALESCE(i.quantity, 0) as quantity FROM products p LEFT JOIN inventory i ON p.id = i.product_id ORDER BY p.created_at DESC');
         res.json(result.rows);
@@ -642,7 +1060,7 @@ app.get('/api/products', async (req, res) => {
     }
 });
 
-app.post('/api/products', async (req, res) => {
+app.post('/api/products', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { name, sku, description } = req.body;
         if (!name) {
@@ -662,7 +1080,7 @@ app.post('/api/products', async (req, res) => {
     }
 });
 
-app.put('/api/products/:id', async (req, res) => {
+app.put('/api/products/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const { name, sku, description } = req.body;
@@ -683,7 +1101,7 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-app.delete('/api/products/:id', async (req, res) => {
+app.delete('/api/products/:id', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { id } = req.params;
         const result = await pool.query('DELETE FROM products WHERE id = $1 RETURNING *', [id]);
@@ -698,7 +1116,7 @@ app.delete('/api/products/:id', async (req, res) => {
 });
 
 // ==================== STOCK PURCHASES API ====================
-app.get('/api/stock-purchases', async (req, res) => {
+app.get('/api/stock-purchases', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT sp.*, p.name as product_name 
@@ -713,7 +1131,7 @@ app.get('/api/stock-purchases', async (req, res) => {
     }
 });
 
-app.post('/api/stock-purchases', async (req, res) => {
+app.post('/api/stock-purchases', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { product_id, sku, product_name, quantity, cost_per_item_kes, supplier_name, purchase_date, notes } = req.body;
 
@@ -743,7 +1161,7 @@ app.post('/api/stock-purchases', async (req, res) => {
 });
 
 // ==================== EXPENSES API ====================
-app.get('/api/expense-categories', async (req, res) => {
+app.get('/api/expense-categories', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM expense_categories ORDER BY name');
         res.json(result.rows);
@@ -753,7 +1171,7 @@ app.get('/api/expense-categories', async (req, res) => {
     }
 });
 
-app.get('/api/expenses', async (req, res) => {
+app.get('/api/expenses', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT e.*, ec.name as category_name 
@@ -768,7 +1186,7 @@ app.get('/api/expenses', async (req, res) => {
     }
 });
 
-app.post('/api/expenses', async (req, res) => {
+app.post('/api/expenses', authenticateToken, authorizeRoles('admin'), async (req, res) => {
     try {
         const { category_id, description, amount_kes, expense_date } = req.body;
         if (!description || !amount_kes || !expense_date) {

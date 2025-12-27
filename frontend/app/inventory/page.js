@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -28,6 +29,7 @@ export default function InventoryPage() {
   };
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Inventory">
       <div className="mb-6 flex justify-end gap-4">
         <Link href="/inventory/purchases/new" className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 font-medium">
@@ -73,5 +75,6 @@ export default function InventoryPage() {
         </div>
       )}
     </Layout>
+    </ProtectedRoute>
   );
 }

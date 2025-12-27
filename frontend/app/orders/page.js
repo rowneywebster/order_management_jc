@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
+import { useAuth } from '../providers/AuthProvider';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 const PAGE_SIZE = 20;
@@ -20,6 +22,9 @@ const getStatusColor = (status) => {
   return colors[status] || 'bg-gray-100 text-gray-800';
 };
 
+const STATUS_SEQUENCE = [null, 'completed', 'pending', 'returned'];
+const STATUS_KEYWORDS = ['completed', 'pending', 'returned'];
+
 export default function OrdersPage() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -33,6 +38,9 @@ export default function OrdersPage() {
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [completeOrder, setCompleteOrder] = useState(null);
   const [amount, setAmount] = useState('');
+  const [statusFilter, setStatusFilter] = useState(null);
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -42,9 +50,18 @@ export default function OrdersPage() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
+  // Auto-detect status keywords in search to keep the filter in sync (e.g., typing "pending")
+  useEffect(() => {
+    const term = searchInput.trim().toLowerCase();
+    const match = STATUS_KEYWORDS.find((keyword) => term.includes(keyword));
+    if (match && statusFilter !== match) {
+      setStatusFilter(match);
+    }
+  }, [searchInput, statusFilter]);
+
   useEffect(() => {
     fetchOrders();
-  }, [page, search]);
+  }, [page, search, statusFilter]);
 
   const fetchOrders = async () => {
     setLoading(true);
@@ -55,6 +72,7 @@ export default function OrdersPage() {
           page,
           limit: PAGE_SIZE,
           search: search?.trim() || undefined,
+          status: statusFilter || undefined,
         },
       });
 
@@ -91,10 +109,19 @@ export default function OrdersPage() {
     }
   };
 
+  const cycleStatusFilter = () => {
+    const currentIndex = STATUS_SEQUENCE.indexOf(statusFilter);
+    const nextIndex = (currentIndex + 1) % STATUS_SEQUENCE.length;
+    const nextStatus = STATUS_SEQUENCE[nextIndex];
+    setStatusFilter(nextStatus);
+    setPage(1);
+  };
+
   const startIndex = (page - 1) * PAGE_SIZE + 1;
   const endIndex = Math.min(page * PAGE_SIZE, total);
 
   return (
+    <ProtectedRoute allowedRoles={['admin', 'user']}>
     <Layout title="Orders">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100">
         <div className="flex flex-col gap-4 px-6 py-5 border-b border-gray-100 lg:flex-row lg:items-center lg:justify-between">
@@ -139,7 +166,17 @@ export default function OrdersPage() {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Location</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                  <button
+                    className="inline-flex items-center gap-2 text-left text-gray-700 hover:text-blue-700"
+                    onClick={cycleStatusFilter}
+                  >
+                    Status
+                    <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200">
+                      {statusFilter ? statusFilter : 'all'}
+                    </span>
+                  </button>
+                </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
               </tr>
             </thead>
@@ -158,7 +195,12 @@ export default function OrdersPage() {
                 </tr>
               ) : (
                 orders.map((order) => (
-                  <tr key={order.id} className="hover:bg-gray-50">
+                  <tr
+                    key={order.id}
+                    className={`hover:bg-gray-50 ${
+                      order.status === 'returned' ? 'bg-purple-50/70' : ''
+                    }`}
+                  >
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {new Date(order.created_at).toLocaleString('en-KE', {
                         month: 'short',
@@ -206,12 +248,14 @@ export default function OrdersPage() {
                             </button>
                           </>
                         )}
-                        <Link
-                          href={`/orders/${order.id}/edit`}
-                          className="text-gray-600 hover:text-gray-900 font-medium"
-                        >
-                          Edit
-                        </Link>
+                        {isAdmin && (
+                          <Link
+                            href={`/orders/${order.id}/edit`}
+                            className="text-gray-600 hover:text-gray-900 font-medium"
+                          >
+                            Edit
+                          </Link>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -336,5 +380,6 @@ export default function OrdersPage() {
         </div>
       )}
     </Layout>
+    </ProtectedRoute>
   );
 }

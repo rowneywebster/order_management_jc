@@ -5,6 +5,7 @@ import axios from 'axios';
 import { useRouter, useParams } from 'next/navigation';
 import Layout from '../../../components/Layout';
 import Link from 'next/link';
+import ProtectedRoute from '../../../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -95,14 +96,15 @@ export default function EditOrderPage() {
   };
 
   if (loading) {
-    return <Layout title="Edit Order"><p>Loading...</p></Layout>;
+    return <ProtectedRoute allowedRoles={['admin']}><Layout title="Edit Order"><p>Loading...</p></Layout></ProtectedRoute>;
   }
 
   if (error) {
-    return <Layout title="Edit Order"><p className="text-red-500">{error}</p></Layout>;
+    return <ProtectedRoute allowedRoles={['admin']}><Layout title="Edit Order"><p className="text-red-500">{error}</p></Layout></ProtectedRoute>;
   }
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Edit Order">
       <div className="bg-white rounded-lg shadow p-8">
         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -233,5 +235,6 @@ export default function EditOrderPage() {
         </form>
       </div>
     </Layout>
+    </ProtectedRoute>
   );
 }

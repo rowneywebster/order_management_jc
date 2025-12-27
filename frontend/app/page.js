@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import axios from 'axios';
 import Link from 'next/link';
 import Layout from './components/Layout';
+import ProtectedRoute from './components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -91,6 +92,7 @@ export default function Dashboard() {
   const currentProfit = Number(currentMonth.profit || 0);
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Dashboard">
         {error && (
           <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
@@ -358,5 +360,6 @@ export default function Dashboard() {
           </div>
         )}
     </Layout>
+    </ProtectedRoute>
   );
 }

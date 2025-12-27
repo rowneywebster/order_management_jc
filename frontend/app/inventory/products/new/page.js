@@ -4,6 +4,7 @@ import { useState } from 'react';
 import axios from 'axios';
 import { useRouter } from 'next/navigation';
 import Layout from '../../../components/Layout';
+import ProtectedRoute from '../../../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -39,6 +40,7 @@ export default function NewProductPage() {
   };
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Add New Product">
       <div className="bg-white rounded-lg shadow p-8">
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -96,5 +98,6 @@ export default function NewProductPage() {
         </form>
       </div>
     </Layout>
+    </ProtectedRoute>
   );
 }

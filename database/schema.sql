@@ -53,6 +53,36 @@ CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_rescheduled_date ON orders(rescheduled_date) WHERE rescheduled_date IS NOT NULL;
 
+-- Nairobi same-day delivery orders (kept separate to avoid touching inventory)
+CREATE TABLE IF NOT EXISTS nairobi_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_first_name VARCHAR(255) NOT NULL,
+    customer_full_name VARCHAR(255),
+    phone VARCHAR(20),
+    alt_phone VARCHAR(20),
+    address TEXT NOT NULL,
+    product VARCHAR(255) NOT NULL,
+    amount_payable NUMERIC(10, 2) NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'unassigned',
+    assigned_to VARCHAR(255),
+    assigned_phone VARCHAR(20),
+    assigned_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_nairobi_orders_status ON nairobi_orders(status);
+CREATE INDEX IF NOT EXISTS idx_nairobi_orders_created_at ON nairobi_orders(created_at DESC);
+
+-- Riders (manage who receives Nairobi notifications)
+CREATE TABLE IF NOT EXISTS riders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL,
+    phone VARCHAR(20) UNIQUE NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_riders_active ON riders(is_active);
+
 -- Insert your first website
 INSERT INTO websites (name, webhook_key, contact_email, website_url) 
 VALUES (

@@ -5,6 +5,7 @@ import axios from 'axios';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Layout from '../../components/Layout';
+import ProtectedRoute from '../../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -99,6 +100,7 @@ export default function NewOrderPage() {
   };
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Add New Order">
         <div className="bg-white rounded-lg shadow p-8">
           <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -299,5 +301,6 @@ export default function NewOrderPage() {
           </form>
         </div>
     </Layout>
+    </ProtectedRoute>
   );
 }

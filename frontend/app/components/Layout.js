@@ -3,27 +3,45 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import { useAuth } from '../providers/AuthProvider';
+import { useRouter } from 'next/navigation';
 
 export default function Layout({ title, children }) {
   const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const router = useRouter();
+  const { user, logout } = useAuth();
 
   const logoUrl =
     'https://joyfulcargo.co.ke/wp-content/uploads/2025/10/cropped-cropped-Gemini_Generated_Image_op6zqnop6zqnop6z-removebg-preview.png';
   const toggleIconUrl = 'https://joyfulcargo.co.ke/wp-content/uploads/2025/12/sidebar.png';
 
   const navLinks = [
-    { href: '/', label: 'Dashboard' },
-    { href: '/orders', label: 'Orders' },
-    { href: '/inventory', label: 'Inventory' },
-    { href: '/expenses', label: 'Expenses' },
-    { href: '/performance', label: 'Performance' },
-    { href: '/websites', label: 'Websites' },
+    { href: '/', label: 'Dashboard', roles: ['admin'] },
+    { href: '/orders', label: 'Orders', roles: ['admin', 'user'] },
+    { href: '/inventory', label: 'Inventory', roles: ['admin'] },
+    { href: '/expenses', label: 'Expenses', roles: ['admin'] },
+    { href: '/performance', label: 'Performance', roles: ['admin'] },
+    { href: '/nairobi', label: 'Nairobi', roles: ['admin', 'rider'], allowPublic: true },
+    { href: '/riders', label: 'Riders', roles: ['admin'] },
+    { href: '/websites', label: 'Websites', roles: ['admin'] },
   ];
 
   const isActive = (href) => {
     if (href === '/') return pathname === href;
     return pathname === href || pathname.startsWith(`${href}/`);
+  };
+
+  const visibleLinks = navLinks.filter((link) => {
+    if (link.allowPublic) return true;
+    if (!link.roles) return true;
+    return user && link.roles.includes(user.role);
+  });
+  const canAddOrders = user?.role === 'admin';
+
+  const handleLogout = () => {
+    logout();
+    router.push('/login');
   };
 
   return (
@@ -48,7 +66,7 @@ export default function Layout({ title, children }) {
           </Link>
         </div>
         <nav className="p-4 space-y-1">
-          {navLinks.map((link) => (
+          {visibleLinks.map((link) => (
             <Link
               key={link.href}
               href={link.href}
@@ -64,15 +82,17 @@ export default function Layout({ title, children }) {
             </Link>
           ))}
         </nav>
-        <div className="px-4 pb-6">
-          <Link
-            href="/orders/new"
-            onClick={() => setSidebarOpen(false)}
-            className="block w-full text-center bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition-colors"
-          >
-            + Add Order
-          </Link>
-        </div>
+        {canAddOrders && (
+          <div className="px-4 pb-6">
+            <Link
+              href="/orders/new"
+              onClick={() => setSidebarOpen(false)}
+              className="block w-full text-center bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold shadow hover:bg-blue-700 transition-colors"
+            >
+              + Add Order
+            </Link>
+          </div>
+        )}
       </aside>
 
       {/* Mobile overlay */}
@@ -104,12 +124,30 @@ export default function Layout({ title, children }) {
                 <h1 className="text-2xl font-bold text-gray-900">{title}</h1>
               </div>
             </div>
-            <Link
-              href="/orders/new"
-              className="hidden sm:inline-flex items-center px-4 py-2 text-sm font-semibold rounded-lg shadow bg-blue-600 text-white hover:bg-blue-700"
-            >
-              + Add Order
-            </Link>
+            <div className="flex items-center gap-3">
+              {canAddOrders && (
+                <Link
+                  href="/orders/new"
+                  className="hidden sm:inline-flex items-center px-4 py-2 text-sm font-semibold rounded-lg shadow bg-blue-600 text-white hover:bg-blue-700"
+                >
+                  + Add Order
+                </Link>
+              )}
+              {user && (
+                <div className="flex items-center gap-2">
+                  <div className="hidden sm:flex flex-col items-end text-sm">
+                    <span className="font-semibold text-gray-900">{user.email}</span>
+                    <span className="text-gray-500">{user.role}</span>
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="px-3 py-2 rounded-lg border border-gray-200 text-sm font-semibold text-gray-700 hover:bg-gray-100"
+                  >
+                    Logout
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 

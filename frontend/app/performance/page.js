@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import Layout from '../components/Layout';
+import ProtectedRoute from '../components/ProtectedRoute';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -40,6 +41,7 @@ export default function PerformancePage() {
   const currentMonth = useMemo(() => performance?.[0], [performance]);
 
   return (
+    <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Performance">
       <div className="space-y-6">
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
@@ -66,7 +68,7 @@ export default function PerformancePage() {
           )}
 
           {currentMonth && (
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-6">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-6">
               <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
                 <p className="text-sm text-blue-700">Current Month</p>
                 <p className="text-lg font-bold text-blue-900 mt-1">{currentMonth.month}</p>
@@ -90,6 +92,12 @@ export default function PerformancePage() {
                   {formatCurrency(currentMonth.profit)}
                 </p>
               </div>
+              <div className="bg-white border border-gray-100 rounded-xl p-4 shadow-sm">
+                <p className="text-sm text-gray-500">Returns</p>
+                <p className="text-2xl font-bold text-amber-700 mt-1">
+                  {Number(currentMonth.returns || 0).toLocaleString()}
+                </p>
+              </div>
             </div>
           )}
 
@@ -98,15 +106,16 @@ export default function PerformancePage() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Month</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Revenue</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expenses</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Profit</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Orders</th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {loading ? (
-                  <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Revenue</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Expenses</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Profit</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Orders</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Returns</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {loading ? (
+              <tr>
                     <td colSpan={5} className="px-6 py-8 text-center text-gray-500">
                       Loading performance…
                     </td>
@@ -137,6 +146,9 @@ export default function PerformancePage() {
                         {formatCurrency(row.profit)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{row.total_orders}</td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-amber-700 font-semibold">
+                        {row.returns}
+                      </td>
                     </tr>
                   ))
                 )}
@@ -146,5 +158,6 @@ export default function PerformancePage() {
         </div>
       </div>
     </Layout>
+    </ProtectedRoute>
   );
 }
