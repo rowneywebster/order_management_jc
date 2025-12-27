@@ -7,7 +7,7 @@ import express from 'express';
 const { Client, LocalAuth } = pkg;
 
 // Admin WhatsApp numbers
-const ADMIN_NUMBERS = ['+254720809823', '+254726884643'];
+const ADMIN_NUMBERS = ['+254791365400', '+254726884643'];
 
 // Redis connection - UPDATED TO USE REDIS_URL
 const redis = new Redis(
