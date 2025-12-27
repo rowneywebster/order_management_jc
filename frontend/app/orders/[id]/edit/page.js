@@ -27,9 +27,15 @@ export default function EditOrderPage() {
         axios.get(`${API_URL}/api/websites`),
       ])
       .then(([orderRes, productsRes, websitesRes]) => {
-        setFormData(orderRes.data);
         setProducts(productsRes.data);
         setWebsites(websitesRes.data);
+
+        const existing = orderRes.data;
+        const matchedProduct = productsRes.data.find(p => p.id === existing.product_id);
+        setFormData({
+          ...existing,
+          sku: matchedProduct?.sku || existing.sku || ''
+        });
       })
       .catch(err => {
         console.error('Error fetching data:', err);
@@ -41,6 +47,28 @@ export default function EditOrderPage() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+    if (name === 'product_id') {
+      const selected = products.find(p => p.id === value);
+      setFormData(prev => ({
+        ...prev,
+        product_id: value,
+        sku: selected?.sku || '',
+        product_name: selected?.name || prev.product_name
+      }));
+      return;
+    }
+
+    if (name === 'sku') {
+      const selected = products.find(p => (p.sku || '').toLowerCase() === value.toLowerCase());
+      setFormData(prev => ({
+        ...prev,
+        sku: value,
+        product_id: selected?.id || '',
+        product_name: selected?.name || prev.product_name
+      }));
+      return;
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -48,6 +76,12 @@ export default function EditOrderPage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    if ((formData.status === 'completed' || formData.status === 'returned') && !formData.product_id) {
+      setError('Select a SKU/product before marking an order as completed or returned.');
+      setLoading(false);
+      return;
+    }
 
     try {
       await axios.put(`${API_URL}/api/orders/${id}`, formData);
@@ -80,10 +114,28 @@ export default function EditOrderPage() {
             </select>
           </div>
 
+          {/* SKU */}
+          <div>
+            <label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU</label>
+            <select
+              id="sku"
+              name="sku"
+              value={formData.sku || ''}
+              onChange={handleChange}
+              className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+            >
+              <option value="">None (no stock update)</option>
+              {products.map(p => (
+                <option key={p.id} value={p.sku || ''}>{p.sku || '(No SKU)'} — {p.name}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Product */}
           <div>
             <label htmlFor="product_id" className="block text-sm font-medium text-gray-700">Product</label>
-            <select id="product_id" name="product_id" value={formData.product_id} onChange={handleChange} required className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
+            <select id="product_id" name="product_id" value={formData.product_id} onChange={handleChange} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
+              <option value="">None (no stock update)</option>
               {products.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>

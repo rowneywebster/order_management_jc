@@ -34,6 +34,40 @@ const whatsappQueue = new Queue('whatsapp-notifications', { connection: redis })
 app.use(cors());
 app.use(express.json());
 
+// Helper: resolve product_id using provided identifiers
+async function resolveProductId({ product_id, sku, product_name }) {
+    if (product_id) return product_id;
+
+    if (sku) {
+        const skuResult = await pool.query(
+            'SELECT id, name FROM products WHERE LOWER(sku) = LOWER($1)',
+            [sku]
+        );
+        if (skuResult.rows.length > 0) {
+            return skuResult.rows[0].id;
+        }
+    }
+
+    if (product_name) {
+        const nameResult = await pool.query(
+            'SELECT id FROM products WHERE LOWER(name) = LOWER($1)',
+            [product_name]
+        );
+        if (nameResult.rows.length > 0) {
+            return nameResult.rows[0].id;
+        }
+    }
+
+    return null;
+}
+
+// Helper: get product name from id
+async function getProductName(productId) {
+    if (!productId) return null;
+    const result = await pool.query('SELECT name FROM products WHERE id = $1', [productId]);
+    return result.rows[0]?.name || null;
+}
+
 // ==================== WEBHOOK ENDPOINT ====================
 app.post('/api/webhook/:webhook_key', async (req, res) => {
     try {
@@ -52,18 +86,24 @@ app.post('/api/webhook/:webhook_key', async (req, res) => {
 
         const website = websiteResult.rows[0];
 
+        const resolvedProductId = await resolveProductId({
+            sku: orderData.sku,
+            product_name: orderData.product
+        });
+        const resolvedProductName = resolvedProductId ? await getProductName(resolvedProductId) : orderData.product;
+
         // Insert order
         const result = await pool.query(
             `INSERT INTO orders (
                 website_id, form_id, product_name, entry_id, 
                 customer_name, phone, alt_phone, email, 
-                county, location, pieces, courier
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) 
+                county, location, pieces, courier, product_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) 
             RETURNING *`,
             [
                 website.id,
                 orderData.form_id,
-                orderData.product,
+                resolvedProductName || orderData.product,
                 orderData.entry_id,
                 orderData.name,
                 orderData.phone,
@@ -72,7 +112,8 @@ app.post('/api/webhook/:webhook_key', async (req, res) => {
                 orderData.county,
                 orderData.location,
                 orderData.pieces || 1,
-                orderData.courier || 'Rowney'
+                orderData.courier || 'Rowney',
+                resolvedProductId
             ]
         );
 
@@ -100,10 +141,14 @@ app.post('/api/webhook/:webhook_key', async (req, res) => {
 // Get all orders with filters
 app.get('/api/orders', async (req, res) => {
     try {
-        const { status, date_from, date_to, website_id } = req.query;
+        const { status, date_from, date_to, website_id, search, page, limit, paginated } = req.query;
+        const isPaginated = paginated === 'true' || paginated === true;
+        const maxRows = 500;
+        const pageSize = Math.min(parseInt(limit, 10) || (isPaginated ? 20 : maxRows), maxRows);
+        const pageNumber = Math.max(parseInt(page, 10) || 1, 1);
+        const offset = (pageNumber - 1) * pageSize;
         
-        let query = `
-            SELECT o.*, w.name as website_name 
+        let baseQuery = `
             FROM orders o 
             LEFT JOIN websites w ON o.website_id = w.id 
             WHERE 1=1
@@ -112,32 +157,75 @@ app.get('/api/orders', async (req, res) => {
         let paramCount = 1;
 
         if (status) {
-            query += ` AND o.status = $${paramCount}`;
+            baseQuery += ` AND o.status = $${paramCount}`;
             params.push(status);
             paramCount++;
         }
 
         if (date_from) {
-            query += ` AND o.created_at >= $${paramCount}`;
+            baseQuery += ` AND o.created_at >= $${paramCount}`;
             params.push(date_from);
             paramCount++;
         }
 
         if (date_to) {
-            query += ` AND o.created_at <= $${paramCount}`;
+            baseQuery += ` AND o.created_at <= $${paramCount}`;
             params.push(date_to);
             paramCount++;
         }
 
         if (website_id) {
-            query += ` AND o.website_id = $${paramCount}`;
+            baseQuery += ` AND o.website_id = $${paramCount}`;
             params.push(website_id);
             paramCount++;
         }
 
-        query += ' ORDER BY o.created_at DESC LIMIT 500';
+        if (search) {
+            baseQuery += ` AND (
+                o.customer_name ILIKE $${paramCount} OR 
+                o.phone ILIKE $${paramCount} OR 
+                o.product_name ILIKE $${paramCount} OR
+                o.county ILIKE $${paramCount}
+            )`;
+            params.push(`%${search}%`);
+            paramCount++;
+        }
 
-        const result = await pool.query(query, params);
+        let safePage = pageNumber;
+        let totalPages = 1;
+        let cappedTotal = 0;
+
+        if (isPaginated) {
+            const countQuery = `SELECT COUNT(*) ${baseQuery}`;
+            const countResult = await pool.query(countQuery, params);
+            const total = parseInt(countResult.rows[0].count, 10);
+            cappedTotal = Math.min(total, maxRows);
+            totalPages = Math.max(1, Math.ceil(cappedTotal / pageSize));
+            safePage = Math.min(pageNumber, totalPages);
+        }
+
+        const cappedOffset = Math.min((safePage - 1) * pageSize, Math.max(0, maxRows - pageSize));
+
+        const dataQuery = `
+            SELECT o.*, w.name as website_name 
+            ${baseQuery}
+            ORDER BY o.created_at DESC 
+            LIMIT ${pageSize}
+            ${isPaginated ? `OFFSET ${cappedOffset}` : ''}
+        `;
+
+        const result = await pool.query(dataQuery, params);
+
+        if (isPaginated) {
+            return res.json({
+                orders: result.rows,
+                total: cappedTotal,
+                page: safePage,
+                pageSize,
+                totalPages
+            });
+        }
+
         res.json(result.rows);
     } catch (error) {
         console.error('Get orders error:', error);
@@ -150,21 +238,30 @@ app.post('/api/orders', async (req, res) => {
     try {
         const orderData = req.body;
 
-        if (!orderData.website_id || !orderData.customer_name || !orderData.phone || !orderData.product_name) {
+        if (!orderData.website_id || !orderData.customer_name || !orderData.phone) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
+
+        const resolvedProductId = await resolveProductId({
+            product_id: orderData.product_id,
+            sku: orderData.sku,
+            product_name: orderData.product_name
+        });
+        const resolvedProductName = resolvedProductId
+            ? await getProductName(resolvedProductId)
+            : orderData.product_name;
 
         const result = await pool.query(
             `INSERT INTO orders (
                 website_id, form_id, product_name, entry_id, 
                 customer_name, phone, alt_phone, email, 
-                county, location, pieces, status, notes, courier
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) 
+                county, location, pieces, status, notes, courier, product_id
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) 
             RETURNING *`,
             [
                 orderData.website_id,
                 orderData.form_id || 'manual',
-                orderData.product_name,
+                resolvedProductName || orderData.product_name,
                 orderData.entry_id,
                 orderData.customer_name,
                 orderData.phone,
@@ -175,7 +272,8 @@ app.post('/api/orders', async (req, res) => {
                 orderData.pieces || 1,
                 orderData.status || 'pending',
                 orderData.notes,
-                orderData.courier
+                orderData.courier,
+                resolvedProductId
             ]
         );
 
@@ -209,22 +307,103 @@ app.get('/api/orders/stats', async (req, res) => {
                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE) as today_count,
                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') as week_count,
                 COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '30 days') as month_count,
+                COUNT(*) FILTER (WHERE created_at >= date_trunc('month', CURRENT_DATE)) as current_month_orders,
+                COUNT(*) FILTER (WHERE status = 'pending' AND created_at >= date_trunc('month', CURRENT_DATE)) as current_month_pending_orders,
                 COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
                 COUNT(*) FILTER (WHERE status = 'approved') as approved_count,
                 COUNT(*) FILTER (WHERE status = 'rescheduled') as rescheduled_count,
                 COUNT(*) as total_count,
-                COALESCE(SUM(amount_kes) FILTER (WHERE status = 'completed'), 0) as total_revenue
+                COALESCE(SUM(amount_kes) FILTER (WHERE status = 'completed'), 0) as total_revenue,
+                COALESCE(SUM(amount_kes) FILTER (WHERE status = 'completed' AND created_at >= date_trunc('month', CURRENT_DATE)), 0) as current_month_revenue
             FROM orders
         `);
 
         const expense_stats = await pool.query(`
-            SELECT COALESCE(SUM(amount_kes), 0) as total_expenses FROM expenses
+            SELECT 
+                COALESCE(SUM(amount_kes), 0) as total_expenses,
+                COALESCE(SUM(amount_kes) FILTER (WHERE expense_date >= date_trunc('month', CURRENT_DATE)), 0) as current_month_expenses
+            FROM expenses
         `);
 
-        res.json({ ...stats.rows[0], ...expense_stats.rows[0] });
+        const combined = { ...stats.rows[0], ...expense_stats.rows[0] };
+
+        const total_profit = parseFloat(combined.total_revenue || 0) - parseFloat(combined.total_expenses || 0);
+        const current_month_profit = parseFloat(combined.current_month_revenue || 0) - parseFloat(combined.current_month_expenses || 0);
+
+        res.json({ 
+            ...combined,
+            total_profit,
+            current_month_profit,
+            all_time: {
+                revenue: combined.total_revenue,
+                expenses: combined.total_expenses,
+                profit: total_profit,
+                orders: combined.total_count,
+                pending_orders: combined.pending_count
+            },
+            current_month: {
+                revenue: combined.current_month_revenue,
+                expenses: combined.current_month_expenses,
+                profit: current_month_profit,
+                orders: combined.current_month_orders,
+                pending_orders: combined.current_month_pending_orders
+            }
+        });
     } catch (error) {
         console.error('Stats error:', error);
         res.status(500).json({ error: 'Failed to fetch statistics' });
+    }
+});
+
+// Monthly performance grouped by calendar month
+app.get('/api/performance/monthly', async (req, res) => {
+    try {
+        const result = await pool.query(`
+            WITH date_bounds AS (
+                SELECT 
+                    LEAST(
+                        COALESCE((SELECT MIN(created_at) FROM orders), CURRENT_DATE),
+                        COALESCE((SELECT MIN(expense_date) FROM expenses), CURRENT_DATE)
+                    ) AS start_date
+            ),
+            months AS (
+                SELECT generate_series(
+                    date_trunc('month', (SELECT start_date FROM date_bounds)),
+                    date_trunc('month', CURRENT_DATE),
+                    interval '1 month'
+                ) AS month_start
+            ),
+            order_totals AS (
+                SELECT 
+                    date_trunc('month', created_at) AS month_start,
+                    COALESCE(SUM(amount_kes) FILTER (WHERE status = 'completed'), 0) AS revenue,
+                    COUNT(*) AS total_orders
+                FROM orders
+                GROUP BY 1
+            ),
+            expense_totals AS (
+                SELECT 
+                    date_trunc('month', expense_date) AS month_start,
+                    COALESCE(SUM(amount_kes), 0) AS expenses
+                FROM expenses
+                GROUP BY 1
+            )
+            SELECT 
+                to_char(m.month_start, 'YYYY-MM') AS month,
+                COALESCE(o.revenue, 0) AS revenue,
+                COALESCE(e.expenses, 0) AS expenses,
+                COALESCE(o.revenue, 0) - COALESCE(e.expenses, 0) AS profit,
+                COALESCE(o.total_orders, 0) AS total_orders
+            FROM months m
+            LEFT JOIN order_totals o ON m.month_start = o.month_start
+            LEFT JOIN expense_totals e ON m.month_start = e.month_start
+            ORDER BY m.month_start DESC
+        `);
+
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Monthly performance error:', error);
+        res.status(500).json({ error: 'Failed to fetch performance data' });
     }
 });
 
@@ -265,7 +444,26 @@ app.get('/api/orders/:id', async (req, res) => {
 app.patch('/api/orders/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        const { status, rescheduled_date, notes, amount_kes, product_id, courier } = req.body;
+        const { status, rescheduled_date, notes, amount_kes, product_id, courier, sku, product_name } = req.body;
+
+        const existing = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
+        if (existing.rows.length === 0) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+        const currentOrder = existing.rows[0];
+
+        const resolvedProductId = await resolveProductId({
+            product_id: product_id || currentOrder.product_id,
+            sku,
+            product_name: product_name || currentOrder.product_name
+        });
+        const resolvedProductName = resolvedProductId
+            ? await getProductName(resolvedProductId)
+            : (product_name || currentOrder.product_name);
+
+        if ((status === 'completed' || status === 'returned') && !resolvedProductId) {
+            return res.status(400).json({ error: 'Cannot complete or return order without SKU/product link' });
+        }
 
         let query = 'UPDATE orders SET updated_at = NOW()';
         const params = [];
@@ -295,9 +493,13 @@ app.patch('/api/orders/:id', async (req, res) => {
             paramCount++;
         }
 
-        if (product_id !== undefined) {
-            query += `, product_id = $${paramCount}`;
-            params.push(product_id);
+        query += `, product_id = $${paramCount}`;
+        params.push(resolvedProductId);
+        paramCount++;
+
+        if (resolvedProductName) {
+            query += `, product_name = $${paramCount}`;
+            params.push(resolvedProductName);
             paramCount++;
         }
 
@@ -328,10 +530,21 @@ app.put('/api/orders/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const {
-            website_id, product_id, form_id, product_name, entry_id,
+            website_id, product_id, form_id, product_name, entry_id, sku,
             customer_name, phone, alt_phone, email, county, location,
             pieces, amount_kes, status, rescheduled_date, notes, courier
         } = req.body;
+
+        const resolvedProductId = await resolveProductId({
+            product_id,
+            sku,
+            product_name
+        });
+        const resolvedProductName = resolvedProductId ? await getProductName(resolvedProductId) : product_name;
+
+        if ((status === 'completed' || status === 'returned') && !resolvedProductId) {
+            return res.status(400).json({ error: 'Cannot complete or return order without SKU/product link' });
+        }
 
         const result = await pool.query(
             `UPDATE orders SET
@@ -341,7 +554,7 @@ app.put('/api/orders/:id', async (req, res) => {
                 courier = $17, updated_at = NOW()
             WHERE id = $18 RETURNING *`,
             [
-                website_id, product_id, form_id, product_name, entry_id,
+                website_id, resolvedProductId, form_id, resolvedProductName, entry_id,
                 customer_name, phone, alt_phone, email, county, location,
                 pieces, amount_kes, status, rescheduled_date, notes, courier, id
             ]
@@ -502,9 +715,15 @@ app.get('/api/stock-purchases', async (req, res) => {
 
 app.post('/api/stock-purchases', async (req, res) => {
     try {
-        const { product_id, quantity, cost_per_item_kes, supplier_name, purchase_date, notes } = req.body;
+        const { product_id, sku, product_name, quantity, cost_per_item_kes, supplier_name, purchase_date, notes } = req.body;
 
-        if (!product_id || !quantity || !cost_per_item_kes || !purchase_date) {
+        const resolvedProductId = await resolveProductId({ product_id, sku, product_name });
+
+        if (!resolvedProductId) {
+            return res.status(400).json({ error: 'SKU/product link is required to record a purchase' });
+        }
+
+        if (!quantity || !cost_per_item_kes || !purchase_date) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
@@ -513,7 +732,7 @@ app.post('/api/stock-purchases', async (req, res) => {
         const result = await pool.query(
             `INSERT INTO stock_purchases (product_id, quantity, cost_per_item_kes, total_cost_kes, supplier_name, purchase_date, notes) 
              VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-            [product_id, quantity, cost_per_item_kes, total_cost_kes, supplier_name, purchase_date, notes]
+            [resolvedProductId, quantity, cost_per_item_kes, total_cost_kes, supplier_name, purchase_date, notes]
         );
 
         res.status(201).json(result.rows[0]);

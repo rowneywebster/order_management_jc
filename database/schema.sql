@@ -130,20 +130,49 @@ EXECUTE FUNCTION update_inventory_on_purchase();
 -- Trigger to update inventory on order completion/cancellation
 CREATE OR REPLACE FUNCTION update_inventory_on_order_status_change()
 RETURNS TRIGGER AS $$
+DECLARE
+    old_effect INTEGER := 0;
+    new_effect INTEGER := 0;
 BEGIN
-    -- If order is marked as 'completed', decrease stock
-    IF NEW.status = 'completed' AND OLD.status != 'completed' AND NEW.product_id IS NOT NULL THEN
-        UPDATE inventory 
-        SET quantity = quantity - NEW.pieces
-        WHERE product_id = NEW.product_id;
-    
-    -- If a 'completed' order is cancelled, put stock back
-    ELSIF NEW.status = 'cancelled' AND OLD.status = 'completed' AND NEW.product_id IS NOT NULL THEN
-        UPDATE inventory
-        SET quantity = quantity + NEW.pieces
-        WHERE product_id = NEW.product_id;
+    IF NEW.product_id IS NULL THEN
+        RETURN NEW;
     END IF;
-    
+
+    -- completed => subtract pieces, returned => add pieces, others => no change.
+    IF TG_OP = 'UPDATE' THEN
+        old_effect := CASE OLD.status
+            WHEN 'completed' THEN -COALESCE(OLD.pieces, 1)
+            WHEN 'returned' THEN COALESCE(OLD.pieces, 1)
+            ELSE 0
+        END;
+
+        -- If product link changed, reverse the old effect on the previous product before proceeding.
+        IF NEW.product_id <> OLD.product_id AND old_effect <> 0 THEN
+            INSERT INTO inventory (product_id, quantity, updated_at)
+            VALUES (OLD.product_id, -old_effect, NOW())
+            ON CONFLICT (product_id) DO UPDATE
+            SET quantity = inventory.quantity - old_effect,
+                updated_at = NOW();
+            old_effect := 0; -- reset so the new product only sees the new_effect delta
+        END IF;
+    END IF;
+
+    new_effect := CASE NEW.status
+        WHEN 'completed' THEN -COALESCE(NEW.pieces, 1)
+        WHEN 'returned' THEN COALESCE(NEW.pieces, 1)
+        ELSE 0
+    END;
+
+    IF new_effect = old_effect THEN
+        RETURN NEW;
+    END IF;
+
+    INSERT INTO inventory (product_id, quantity, updated_at)
+    VALUES (NEW.product_id, new_effect, NOW())
+    ON CONFLICT (product_id) DO UPDATE
+    SET quantity = inventory.quantity + (new_effect - old_effect),
+        updated_at = NOW();
+
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -151,6 +180,11 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS after_order_update ON orders;
 CREATE TRIGGER after_order_update
 AFTER UPDATE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION update_inventory_on_order_status_change();
+DROP TRIGGER IF EXISTS after_order_insert ON orders;
+CREATE TRIGGER after_order_insert
+AFTER INSERT ON orders
 FOR EACH ROW
 EXECUTE FUNCTION update_inventory_on_order_status_change();
 

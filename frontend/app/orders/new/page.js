@@ -14,6 +14,7 @@ export default function NewOrderPage() {
   const [formData, setFormData] = useState({
     website_id: '',
     product_id: '',
+    sku: '',
     product_name: '',
     customer_name: '',
     phone: '',
@@ -40,13 +41,6 @@ export default function NewOrderPage() {
       if (websitesRes.data.length > 0) {
         setFormData(prev => ({ ...prev, website_id: websitesRes.data[0].id }));
       }
-      if (productsRes.data.length > 0) {
-        setFormData(prev => ({ 
-          ...prev, 
-          product_id: productsRes.data[0].id,
-          product_name: productsRes.data[0].name,
-        }));
-      }
     })
     .catch(err => {
       console.error('Error fetching data:', err);
@@ -62,17 +56,36 @@ export default function NewOrderPage() {
       setFormData(prev => ({ 
         ...prev, 
         product_id: value,
-        product_name: selectedProduct ? selectedProduct.name : ''
+        sku: selectedProduct?.sku || '',
+        product_name: selectedProduct ? selectedProduct.name : prev.product_name,
       }));
-    } else {
-      setFormData(prev => ({ ...prev, [name]: value }));
+      return;
     }
+
+    if (name === 'sku') {
+      const selectedProduct = products.find(p => (p.sku || '').toLowerCase() === value.toLowerCase());
+      setFormData(prev => ({
+        ...prev,
+        sku: value,
+        product_id: selectedProduct?.id || '',
+        product_name: selectedProduct?.name || prev.product_name,
+      }));
+      return;
+    }
+
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    if (formData.status === 'completed' && !formData.product_id) {
+      setError('Select a SKU/product before marking an order as completed.');
+      setLoading(false);
+      return;
+    }
 
     try {
       await axios.post(`${API_URL}/api/orders`, formData);
@@ -106,6 +119,23 @@ export default function NewOrderPage() {
               </select>
             </div>
 
+            {/* SKU Selector */}
+            <div>
+              <label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU (optional)</label>
+              <select
+                id="sku"
+                name="sku"
+                value={formData.sku}
+                onChange={handleChange}
+                className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
+              >
+                <option value="">None (no stock update)</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.sku || ''}>{p.sku || '(No SKU)'} — {p.name}</option>
+                ))}
+              </select>
+            </div>
+
             {/* Product Dropdown */}
             <div>
               <label htmlFor="product_id" className="block text-sm font-medium text-gray-700">Product</label>
@@ -114,9 +144,9 @@ export default function NewOrderPage() {
                 name="product_id"
                 value={formData.product_id}
                 onChange={handleChange}
-                required
                 className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
               >
+                <option value="">None (no stock update)</option>
                 {products.map(p => (
                   <option key={p.id} value={p.id}>{p.name}</option>
                 ))}

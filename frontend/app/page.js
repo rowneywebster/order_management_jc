@@ -7,10 +7,21 @@ import Layout from './components/Layout';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+const formatCurrency = (value) => {
+  const amount = Number(value || 0);
+  return `KES ${amount.toLocaleString('en-KE', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })}`;
+};
+
+const formatNumber = (value) => Number(value || 0).toLocaleString('en-KE');
+
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [rescheduleDate, setRescheduleDate] = useState('');
   const [completeOrder, setCompleteOrder] = useState(null);
@@ -24,13 +35,14 @@ export default function Dashboard() {
     try {
       const [statsRes, ordersRes] = await Promise.all([
         axios.get(`${API_URL}/api/orders/stats`),
-        axios.get(`${API_URL}/api/orders`)
+        axios.get(`${API_URL}/api/orders`, { params: { limit: 5 } })
       ]);
       setStats(statsRes.data);
       setOrders(ordersRes.data);
+      setError('');
     } catch (error) {
       console.error('Error fetching data:', error);
-      alert('Failed to load data');
+      setError('Failed to load dashboard data');
     } finally {
       setLoading(false);
     }
@@ -46,9 +58,10 @@ export default function Dashboard() {
       fetchData(); // Refresh data
       setSelectedOrder(null);
       setRescheduleDate('');
+      setError('');
     } catch (error) {
       console.error('Error updating order:', error);
-      alert('Failed to update order');
+      setError(error.response?.data?.error || 'Failed to update order');
     }
   };
 
@@ -61,52 +74,125 @@ export default function Dashboard() {
       completed: 'bg-gray-100 text-gray-800'
     };
     return colors[status] || 'bg-gray-100 text-gray-800';
-  };
+    };
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 text-gray-800">
         <div className="text-xl">Loading...</div>
       </div>
     );
   }
 
-  const netProfit = (stats?.total_revenue || 0) - (stats?.total_expenses || 0);
+  const allTime = stats?.all_time || {};
+  const currentMonth = stats?.current_month || {};
+
+  const totalProfit = Number(stats?.total_profit || 0);
+  const currentProfit = Number(currentMonth.profit || 0);
 
   return (
     <Layout title="Dashboard">
-        {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-gray-500 text-sm font-medium">Total Revenue</h3>
-            <p className="text-3xl font-bold text-green-600 mt-2">
-              KES {parseFloat(stats?.total_revenue || 0).toFixed(2)}
-            </p>
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+            {error}
           </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-gray-500 text-sm font-medium">Total Expenses</h3>
-            <p className="text-3xl font-bold text-red-600 mt-2">
-              KES {parseFloat(stats?.total_expenses || 0).toFixed(2)}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-gray-500 text-sm font-medium">Net Profit</h3>
-            <p className={`text-3xl font-bold mt-2 ${netProfit >= 0 ? 'text-blue-600' : 'text-yellow-600'}`}>
-              KES {netProfit.toFixed(2)}
-            </p>
-          </div>
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-gray-500 text-sm font-medium">Pending Orders</h3>
-            <p className="text-3xl font-bold text-yellow-600 mt-2">
-              {stats?.pending_count || 0}
-            </p>
-          </div>
-        </div>
+        )}
 
-        {/* Orders Table */}
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h2 className="text-xl font-semibold text-gray-900">Recent Orders</h2>
+        <section className="space-y-6">
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold text-gray-800">All-Time Snapshot</h2>
+              <span className="text-xs text-gray-500 uppercase tracking-wide">Live data</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Total Revenue</p>
+                <p className="text-2xl font-bold text-emerald-700 mt-2">{formatCurrency(allTime.revenue)}</p>
+                <p className="text-xs text-gray-500 mt-1">Completed orders</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Total Expenses</p>
+                <p className="text-2xl font-bold text-red-700 mt-2">{formatCurrency(allTime.expenses)}</p>
+                <p className="text-xs text-gray-500 mt-1">All-time spend</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Total Profit</p>
+                <p
+                  className={`text-2xl font-bold mt-2 ${
+                    totalProfit >= 0 ? 'text-blue-700' : 'text-amber-700'
+                  }`}
+                >
+                  {formatCurrency(totalProfit)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">Revenue - expenses</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Total Orders</p>
+                <p className="text-2xl font-bold text-gray-900 mt-2">{formatNumber(allTime.orders)}</p>
+                <p className="text-xs text-gray-500 mt-1">Lifetime volume</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Pending Orders</p>
+                <p className="text-2xl font-bold text-amber-700 mt-2">
+                  {formatNumber(allTime.pending_orders || stats?.pending_count)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">Awaiting action</p>
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-lg font-semibold text-gray-800">Current Month</h2>
+              <span className="text-xs text-gray-500 uppercase tracking-wide">Calendar month</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-4">
+              <div className="bg-blue-50 rounded-xl border border-blue-100 p-4">
+                <p className="text-sm text-blue-700">Revenue</p>
+                <p className="text-2xl font-bold text-blue-900 mt-2">{formatCurrency(currentMonth.revenue)}</p>
+                <p className="text-xs text-blue-700/80 mt-1">Completed orders</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Expenses</p>
+                <p className="text-2xl font-bold text-red-700 mt-2">{formatCurrency(currentMonth.expenses)}</p>
+                <p className="text-xs text-gray-500 mt-1">This month spend</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Profit</p>
+                <p
+                  className={`text-2xl font-bold mt-2 ${
+                    currentProfit >= 0 ? 'text-emerald-700' : 'text-amber-700'
+                  }`}
+                >
+                  {formatCurrency(currentProfit)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">Live calculation</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Orders</p>
+                <p className="text-2xl font-bold text-gray-900 mt-2">{formatNumber(currentMonth.orders)}</p>
+                <p className="text-xs text-gray-500 mt-1">This month</p>
+              </div>
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+                <p className="text-sm text-gray-500">Pending</p>
+                <p className="text-2xl font-bold text-amber-700 mt-2">
+                  {formatNumber(currentMonth.pending_orders)}
+                </p>
+                <p className="text-xs text-gray-500 mt-1">Awaiting fulfillment</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="px-6 py-4 flex items-center justify-between border-b border-gray-100">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-900">Recent Orders</h2>
+              <p className="text-sm text-gray-500">Latest five orders across all websites</p>
+            </div>
+            <Link href="/orders" className="text-blue-600 font-medium hover:text-blue-800 text-sm">
+              View all orders →
+            </Link>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -125,33 +211,27 @@ export default function Dashboard() {
                 {orders.map((order) => (
                   <tr key={order.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {new Date(order.created_at).toLocaleString('en-KE', { 
-                        month: 'short', 
+                      {new Date(order.created_at).toLocaleString('en-KE', {
+                        month: 'short',
                         day: 'numeric',
                         hour: '2-digit',
-                        minute: '2-digit'
+                        minute: '2-digit',
                       })}
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900">
                       <div className="font-medium">{order.product_name}</div>
                       <div className="text-gray-500 text-xs">{order.website_name}</div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {order.customer_name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {order.phone}
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
-                      {order.county}
-                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-900">{order.customer_name}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{order.phone}</td>
+                    <td className="px-6 py-4 text-sm text-gray-900">{order.county}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(order.status)}`}>
                         {order.status}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         {order.status === 'pending' && (
                           <>
                             <button
@@ -174,7 +254,10 @@ export default function Dashboard() {
                             </button>
                           </>
                         )}
-                        <Link href={`/orders/${order.id}/edit`} className="text-gray-600 hover:text-gray-900 font-medium">
+                        <Link
+                          href={`/orders/${order.id}/edit`}
+                          className="text-gray-600 hover:text-gray-900 font-medium"
+                        >
                           Edit
                         </Link>
                       </div>
@@ -184,94 +267,96 @@ export default function Dashboard() {
               </tbody>
             </table>
           </div>
-        </div>
+        </section>
 
-      {/* Reschedule Modal */}
-      {selectedOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-8 max-w-md w-full">
-            <h3 className="text-xl font-bold mb-4">Reschedule Order</h3>
-            <p className="text-gray-600 mb-4">
-              Order: {selectedOrder.product_name} - {selectedOrder.customer_name}
-            </p>
-            <input
-              type="date"
-              value={rescheduleDate}
-              onChange={(e) => setRescheduleDate(e.target.value)}
-              min={new Date().toISOString().split('T')[0]}
-              className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
-            />
-            <div className="flex gap-4">
-              <button
-                onClick={() => {
-                  if (rescheduleDate) {
-                    updateOrderStatus(selectedOrder.id, 'rescheduled', rescheduleDate);
-                  }
-                }}
-                disabled={!rescheduleDate}
-                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
-              >
-                Confirm
-              </button>
-              <button
-                onClick={() => {
-                  setSelectedOrder(null);
-                  setRescheduleDate('');
-                }}
-                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400"
-              >
-                Cancel
-              </button>
+        {/* Reschedule Modal */}
+        {selectedOrder && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-8 max-w-md w-full shadow-xl">
+              <h3 className="text-xl font-bold mb-4">Reschedule Order</h3>
+              <p className="text-gray-600 mb-4">
+                Order: {selectedOrder.product_name} - {selectedOrder.customer_name}
+              </p>
+              <input
+                type="date"
+                value={rescheduleDate}
+                onChange={(e) => setRescheduleDate(e.target.value)}
+                min={new Date().toISOString().split('T')[0]}
+                className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
+              />
+              <div className="flex gap-4">
+                <button
+                  onClick={() => {
+                    if (rescheduleDate) {
+                      updateOrderStatus(selectedOrder.id, 'rescheduled', rescheduleDate);
+                    }
+                  }}
+                  disabled={!rescheduleDate}
+                  className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedOrder(null);
+                    setRescheduleDate('');
+                  }}
+                  className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Complete Order Modal */}
-      {completeOrder && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg p-8 max-w-md w-full">
-            <h3 className="text-xl font-bold mb-4">Complete Order</h3>
-            <p className="text-gray-600 mb-4">
-              Order: {completeOrder.product_name} - {completeOrder.customer_name}
-            </p>
-            <label htmlFor="amount" className="block text-sm font-medium text-gray-700">Amount (KES)</label>
-            <input
-              type="number"
-              id="amount"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              step="0.01"
-              required
-              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"
-            />
-            <div className="flex gap-4 mt-4">
-              <button
-                onClick={() => {
-                  if (amount) {
-                    updateOrderStatus(completeOrder.id, 'completed', null, amount);
+        {/* Complete Order Modal */}
+        {completeOrder && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-8 max-w-md w-full shadow-xl">
+              <h3 className="text-xl font-bold mb-4">Complete Order</h3>
+              <p className="text-gray-600 mb-4">
+                Order: {completeOrder.product_name} - {completeOrder.customer_name}
+              </p>
+              <label htmlFor="amount" className="block text-sm font-medium text-gray-700">
+                Amount (KES)
+              </label>
+              <input
+                type="number"
+                id="amount"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                step="0.01"
+                required
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"
+              />
+              <div className="flex gap-4 mt-4">
+                <button
+                  onClick={() => {
+                    if (amount) {
+                      updateOrderStatus(completeOrder.id, 'completed', null, amount);
+                      setCompleteOrder(null);
+                      setAmount('');
+                    }
+                  }}
+                  disabled={!amount}
+                  className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={() => {
                     setCompleteOrder(null);
                     setAmount('');
-                  }
-                }}
-                disabled={!amount}
-                className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50"
-              >
-                Confirm
-              </button>
-              <button
-                onClick={() => {
-                  setCompleteOrder(null);
-                  setAmount('');
-                }}
-                className="flex-1 bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400"
-              >
-                Cancel
-              </button>
+                  }}
+                  className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
     </Layout>
   );
 }

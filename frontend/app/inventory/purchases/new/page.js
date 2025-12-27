@@ -11,6 +11,7 @@ export default function NewPurchasePage() {
   const [products, setProducts] = useState([]);
   const [formData, setFormData] = useState({
     product_id: '',
+    sku: '',
     quantity: 1,
     cost_per_item_kes: '',
     supplier_name: '',
@@ -25,9 +26,6 @@ export default function NewPurchasePage() {
     axios.get(`${API_URL}/api/products`)
       .then(res => {
         setProducts(res.data);
-        if (res.data.length > 0) {
-          setFormData(prev => ({ ...prev, product_id: res.data[0].id }));
-        }
       })
       .catch(err => {
         console.error('Error fetching products:', err);
@@ -37,6 +35,26 @@ export default function NewPurchasePage() {
 
   const handleChange = (e) => {
     const { name, value } = e.target;
+    if (name === 'product_id') {
+      const selected = products.find(p => p.id === value);
+      setFormData(prev => ({
+        ...prev,
+        product_id: value,
+        sku: selected?.sku || '',
+      }));
+      return;
+    }
+
+    if (name === 'sku') {
+      const selected = products.find(p => (p.sku || '').toLowerCase() === value.toLowerCase());
+      setFormData(prev => ({
+        ...prev,
+        sku: value,
+        product_id: selected?.id || '',
+      }));
+      return;
+    }
+
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
@@ -44,6 +62,12 @@ export default function NewPurchasePage() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+
+    if (!formData.product_id) {
+      setError('Select a SKU/product before adding a purchase.');
+      setLoading(false);
+      return;
+    }
 
     try {
       await axios.post(`${API_URL}/api/stock-purchases`, formData);
@@ -60,20 +84,37 @@ export default function NewPurchasePage() {
     <Layout title="Add Stock Purchase">
       <div className="bg-white rounded-lg shadow p-8">
         <form onSubmit={handleSubmit} className="space-y-6">
-          <div>
-            <label htmlFor="product_id" className="block text-sm font-medium text-gray-700">Product</label>
-            <select
-              id="product_id"
-              name="product_id"
-              value={formData.product_id}
-              onChange={handleChange}
-              required
-              className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"
-            >
-              {products.map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label htmlFor="sku" className="block text-sm font-medium text-gray-700">SKU</label>
+              <select
+                id="sku"
+                name="sku"
+                value={formData.sku}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"
+              >
+                <option value="">None (no stock update)</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.sku || ''}>{p.sku || '(No SKU)'} — {p.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="product_id" className="block text-sm font-medium text-gray-700">Product</label>
+              <select
+                id="product_id"
+                name="product_id"
+                value={formData.product_id}
+                onChange={handleChange}
+                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3"
+              >
+                <option value="">None (no stock update)</option>
+                {products.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
