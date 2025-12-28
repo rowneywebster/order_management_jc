@@ -84,6 +84,7 @@ docker-compose logs -f whatsapp-worker
 # Notifications will be sent to:
 # - +254720809823
 # - +254726884643
+### 6. Add Website
 ```
 
 ## 📱 WhatsApp Setup
