@@ -12,6 +12,7 @@ const RIDER_NUMBERS = (process.env.RIDER_WHATSAPP_NUMBERS || process.env.RIDER_N
     .split(',')
     .map((n) => n.trim())
     .filter(Boolean);
+const cleanUrl = (url) => (url || 'http://localhost:3000').replace(/\/+$/, '');
 
 // Redis connection - UPDATED TO USE REDIS_URL
 const redis = new Redis(
@@ -85,6 +86,7 @@ async function sendMessageToRecipients(message, recipients) {
 
 // Send order notification to admins
 async function sendOrderNotification(order, websiteName) {
+    const dashboardBase = cleanUrl(process.env.DASHBOARD_URL);
     const message = `
 🛍️ *NEW ORDER RECEIVED*
 
@@ -105,7 +107,7 @@ Address: ${order.location || 'N/A'}
 🆔 *Order ID:* ${order.id}
 📅 *Time:* ${new Date(order.created_at).toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' })}
 
-🔗 View order: ${process.env.DASHBOARD_URL || 'http://localhost:3000'}/orders/${order.id}
+🔗 View order: ${dashboardBase}/orders/${order.id}
     `.trim();
 
     const recipients = ADMIN_NUMBERS.length > 0 ? ADMIN_NUMBERS : RIDER_NUMBERS;
@@ -113,6 +115,7 @@ Address: ${order.location || 'N/A'}
 }
 
 async function sendNairobiBroadcast(order, dashboardUrl) {
+    const baseUrl = cleanUrl(dashboardUrl);
     // Rider broadcast only includes minimal customer info
     const message = `
 🛵 *Nairobi Same-Day Order*
@@ -123,7 +126,7 @@ async function sendNairobiBroadcast(order, dashboardUrl) {
 💰 Payable to rider: ${order.amount_payable}
 Status: ${order.status}
 
-Claim here: ${dashboardUrl || 'http://localhost:3000'}/nairobi
+Claim here: ${baseUrl}/nairobi
     `.trim();
 
     const recipients = RIDER_NUMBERS.length > 0 ? RIDER_NUMBERS : ADMIN_NUMBERS;
@@ -134,6 +137,7 @@ Claim here: ${dashboardUrl || 'http://localhost:3000'}/nairobi
 
 async function sendNairobiAssignment(order, recipient, dashboardUrl, riderName) {
     if (!recipient) return;
+    const baseUrl = cleanUrl(dashboardUrl);
     // Assignment includes full customer details, sent only to the verified rider
     const message = `
 📦 Order Assigned: ${order.product}
@@ -145,17 +149,24 @@ ${order.alt_phone ? `📱 Alt: ${order.alt_phone}` : ''}
 💰 Payable: ${order.amount_payable}
 Assigned to: ${riderName || 'Rider'}
 
-Dashboard: ${dashboardUrl || 'http://localhost:3000'}/nairobi
+Dashboard: ${baseUrl}/nairobi
     `.trim();
 
     await sendMessageToRecipients(message, [recipient]);
+}
+
+async function sendAdminNotification(message, recipients) {
+    if (!message) return;
+    const targets = Array.isArray(recipients) && recipients.length > 0 ? recipients : ADMIN_NUMBERS;
+    if (targets.length === 0) return;
+    await sendMessageToRecipients(message, targets);
 }
 
 // Create worker to process WhatsApp notifications
 const worker = new Worker(
     'whatsapp-notifications',
     async (job) => {
-        const { order, website, recipients, dashboardUrl, recipient, rider_name } = job.data;
+        const { order, website, recipients, dashboardUrl, recipient, rider_name, message } = job.data;
 
         if (job.name === 'broadcast-nairobi-order') {
             console.log(`📤 Broadcasting Nairobi order ${order.id}`);
@@ -167,6 +178,12 @@ const worker = new Worker(
             console.log(`📤 Sending Nairobi assignment for order ${order.id}`);
             await sendNairobiAssignment(order, recipient, dashboardUrl, rider_name);
             return { success: true, order_id: order.id };
+        }
+
+        if (job.name === 'send-admin-notification') {
+            console.log('📤 Sending admin/rider notification');
+            await sendAdminNotification(message, recipients);
+            return { success: true };
         }
 
         console.log(`📤 Processing admin notification for order ${order.id}`);

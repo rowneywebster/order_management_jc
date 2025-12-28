@@ -15,6 +15,7 @@ const PORT = process.env.PORT || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || 'change_me';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '12h';
 
+const ADMIN_APPROVER_NUMBERS = ['+254791365400', '+254726884643'];
 const NAIROBI_ORDER_STATUSES = new Set(['unassigned', 'assigned', 'delivered']);
 const DEFAULT_RIDERS = (process.env.RIDER_WHATSAPP_NUMBERS || process.env.RIDER_NUMBERS || '')
     .split(',')
@@ -56,6 +57,25 @@ const toMinimalNairobiPayload = (row) => ({
 });
 
 const cleanPhone = (value) => (value || '').replace(/\s+/g, '').replace(/[^\d+]/g, '');
+
+const phoneVariants = (raw) => {
+    const cleaned = cleanPhone(raw);
+    const noPlus = cleaned.replace(/^\+/, '');
+    const variants = new Set();
+    variants.add(cleaned);
+    variants.add(noPlus);
+
+    const strip254 = noPlus.startsWith('254') ? noPlus.slice(3) : noPlus;
+    const with254 = `254${strip254.replace(/^0/, '')}`;
+    const withPlus254 = `+${with254}`;
+    const withLeadingZero = strip254.startsWith('0') ? strip254 : `0${strip254}`;
+
+    variants.add(with254);
+    variants.add(withPlus254);
+    variants.add(withLeadingZero);
+
+    return Array.from(variants).filter(Boolean);
+};
 
 async function getActiveRiderPhones() {
     try {
@@ -209,6 +229,29 @@ async function ensureRidersTable() {
 
 ensureRidersTable().catch((err) => {
     console.error('Failed to ensure riders table exists:', err);
+});
+
+// Pending approvals for Nairobi rider assignments
+async function ensureRiderApprovalRequestsTable() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS rider_approval_requests (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            rider_name VARCHAR(255),
+            rider_phone VARCHAR(20) NOT NULL,
+            nairobi_order_id UUID NOT NULL REFERENCES nairobi_orders(id),
+            status VARCHAR(20) NOT NULL DEFAULT 'pending',
+            requested_at TIMESTAMP DEFAULT NOW(),
+            reviewed_by VARCHAR(255),
+            reviewed_at TIMESTAMP,
+            notes TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_rider_approval_requests_status ON rider_approval_requests(status);
+        CREATE INDEX IF NOT EXISTS idx_rider_approval_requests_requested_at ON rider_approval_requests(requested_at DESC);
+    `);
+}
+
+ensureRiderApprovalRequestsTable().catch((err) => {
+    console.error('Failed to ensure rider_approval_requests table exists:', err);
 });
 
 // ==================== AUTH ====================
@@ -856,6 +899,7 @@ app.post('/api/nairobi-orders/:id/assign', optionalAuthenticate, authorizeRolesO
         }
 
         const sanitizedPhone = cleanPhone(rider_phone);
+        const variants = phoneVariants(rider_phone);
 
         const existing = await pool.query('SELECT * FROM nairobi_orders WHERE id = $1', [id]);
         if (existing.rows.length === 0) {
@@ -867,31 +911,233 @@ app.post('/api/nairobi-orders/:id/assign', optionalAuthenticate, authorizeRolesO
             return res.status(409).json({ error: 'Order is already assigned or delivered' });
         }
 
-        const updated = await pool.query(
+        const riderResult = await pool.query(
+            'SELECT * FROM riders WHERE phone = ANY($1::text[]) LIMIT 1',
+            [variants]
+        );
+        const rider = riderResult.rows[0];
+
+        if (!rider || rider.is_active !== true) {
+            return res.status(403).json({
+                error: 'Rider not verified. Please contact Admin Rowney to be registered as a rider before claiming orders.'
+            });
+        }
+
+        const existingRequest = await pool.query(
+            `SELECT * FROM rider_approval_requests 
+             WHERE nairobi_order_id = $1 AND rider_phone = ANY($2::text[]) AND status = 'pending'
+             LIMIT 1`,
+            [id, variants]
+        );
+
+        let approvalRequest = existingRequest.rows[0];
+
+        if (!approvalRequest) {
+            const insertApproval = await pool.query(
+                `INSERT INTO rider_approval_requests (
+                    rider_name, rider_phone, nairobi_order_id, status
+                ) VALUES ($1, $2, $3, 'pending')
+                RETURNING *`,
+                [rider_name || rider.name || sanitizedPhone, sanitizedPhone, id]
+            );
+            approvalRequest = insertApproval.rows[0];
+        }
+
+        const dashboardUrl = (process.env.DASHBOARD_URL || 'http://localhost:3000').replace(/\/+$/, '');
+        const adminMessage = [
+            '🛵 Rider approval needed',
+            '',
+            `Rider: ${rider_name || rider.name || 'N/A'}`,
+            `Phone: ${sanitizedPhone}`,
+            `Order: ${current.product}`,
+            `Customer: ${current.customer_first_name}`,
+            `Address: ${current.address}`,
+            '',
+            `Approve here: ${dashboardUrl}/riders`
+        ].join('\n');
+
+        await whatsappQueue.add('send-admin-notification', {
+            recipients: ADMIN_APPROVER_NUMBERS,
+            message: adminMessage
+        });
+
+        return res.status(202).json({
+            pending: true,
+            approval_request_id: approvalRequest.id,
+            message: 'Your request has been sent to Admin Rowney for approval. You will be notified via WhatsApp once approved.'
+        });
+    } catch (error) {
+        console.error('Assign Nairobi order error:', error);
+        res.status(500).json({ error: 'Failed to assign Nairobi order' });
+    }
+});
+
+// Rider approval queue (admin managed)
+app.get('/api/rider-approvals', authenticateToken, authorizeRoles('admin'), async (_req, res) => {
+    try {
+        const result = await pool.query(
+            `
+            SELECT rar.*, no.customer_first_name, no.address, no.product, no.amount_payable, no.created_at AS order_created_at
+            FROM rider_approval_requests rar
+            JOIN nairobi_orders no ON rar.nairobi_order_id = no.id
+            WHERE rar.status = 'pending'
+            ORDER BY rar.requested_at DESC
+            LIMIT 500
+            `
+        );
+        res.json(result.rows);
+    } catch (error) {
+        console.error('Get rider approvals error:', error);
+        res.status(500).json({ error: 'Failed to fetch rider approvals' });
+    }
+});
+
+app.post('/api/rider-approvals/:id/approve', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const reviewer = req.user?.email || 'admin';
+
+        const requestResult = await pool.query(
+            `
+            SELECT rar.*, no.customer_first_name, no.customer_full_name, no.phone AS customer_phone, no.alt_phone,
+                   no.address, no.product, no.amount_payable, no.status AS order_status
+            FROM rider_approval_requests rar
+            JOIN nairobi_orders no ON rar.nairobi_order_id = no.id
+            WHERE rar.id = $1
+            `,
+            [id]
+        );
+
+        if (requestResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Approval request not found' });
+        }
+
+        const approval = requestResult.rows[0];
+
+        if (approval.status !== 'pending') {
+            return res.status(400).json({ error: 'Approval request is already processed' });
+        }
+
+        if (approval.order_status !== 'unassigned') {
+            return res.status(409).json({ error: 'Order is already assigned or delivered' });
+        }
+
+        const variants = phoneVariants(approval.rider_phone);
+        const riderResult = await pool.query(
+            'SELECT * FROM riders WHERE phone = ANY($1::text[]) LIMIT 1',
+            [variants]
+        );
+        let rider = riderResult.rows[0];
+        const riderName = approval.rider_name || rider?.name || approval.rider_phone;
+
+        if (!rider) {
+            const insertRider = await pool.query(
+                'INSERT INTO riders (name, phone, is_active) VALUES ($1, $2, true) RETURNING *',
+                [riderName, approval.rider_phone]
+            );
+            rider = insertRider.rows[0];
+        } else if (!rider.is_active || rider.name !== riderName) {
+            const updateRider = await pool.query(
+                'UPDATE riders SET is_active = true, name = COALESCE($1, name) WHERE id = $2 RETURNING *',
+                [riderName || rider.name, rider.id]
+            );
+            rider = updateRider.rows[0];
+        }
+
+        const updatedApproval = await pool.query(
+            `UPDATE rider_approval_requests
+             SET status = 'approved',
+                 reviewed_by = $1,
+                 reviewed_at = NOW()
+             WHERE id = $2
+             RETURNING *`,
+            [reviewer, id]
+        );
+
+        const updatedOrder = await pool.query(
             `UPDATE nairobi_orders
              SET status = 'assigned',
-                 assigned_to = COALESCE($1, $2),
+                 assigned_to = $1,
                  assigned_phone = $2,
                  assigned_at = NOW(),
                  updated_at = NOW()
              WHERE id = $3
              RETURNING *`,
-            [rider_name, sanitizedPhone, id]
+            [riderName, approval.rider_phone, approval.nairobi_order_id]
         );
 
-        const order = updated.rows[0];
+        const order = updatedOrder.rows[0];
 
         await whatsappQueue.add('send-nairobi-assignment', {
             order,
-            recipient: sanitizedPhone,
-            rider_name: rider_name || sanitizedPhone,
+            recipient: approval.rider_phone,
+            rider_name: riderName,
             dashboardUrl: process.env.DASHBOARD_URL || 'http://localhost:3000',
         });
 
-        res.json(toMinimalNairobiPayload(order));
+        const baseUrl = (process.env.DASHBOARD_URL || 'http://localhost:3000').replace(/\/+$/, '');
+        const confirmation = [
+            '✅ You have been approved for Nairobi orders.',
+            `Order assigned: ${order.product}`,
+            `Customer: ${order.customer_full_name || order.customer_first_name}`,
+            `Address: ${order.address}`,
+            `Phone: ${order.phone || 'N/A'}`,
+            `Alt: ${order.alt_phone || 'N/A'}`,
+            `Dashboard: ${baseUrl}/nairobi`
+        ].join('\n');
+
+        await whatsappQueue.add('send-admin-notification', {
+            recipients: [approval.rider_phone],
+            message: confirmation
+        });
+
+        res.json({
+            approval: updatedApproval.rows[0],
+            order: toMinimalNairobiPayload(order),
+            rider
+        });
     } catch (error) {
-        console.error('Assign Nairobi order error:', error);
-        res.status(500).json({ error: 'Failed to assign Nairobi order' });
+        console.error('Approve rider request error:', error);
+        res.status(500).json({ error: 'Failed to approve rider request' });
+    }
+});
+
+app.post('/api/rider-approvals/:id/reject', authenticateToken, authorizeRoles('admin'), async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { notes } = req.body || {};
+        const reviewer = req.user?.email || 'admin';
+
+        const requestResult = await pool.query(
+            `SELECT * FROM rider_approval_requests WHERE id = $1`,
+            [id]
+        );
+
+        if (requestResult.rows.length === 0) {
+            return res.status(404).json({ error: 'Approval request not found' });
+        }
+
+        const approval = requestResult.rows[0];
+
+        if (approval.status !== 'pending') {
+            return res.status(400).json({ error: 'Approval request is already processed' });
+        }
+
+        const updatedApproval = await pool.query(
+            `UPDATE rider_approval_requests
+             SET status = 'rejected',
+                 reviewed_by = $1,
+                 reviewed_at = NOW(),
+                 notes = $3
+             WHERE id = $2
+             RETURNING *`,
+            [reviewer, id, notes || null]
+        );
+
+        res.json({ approval: updatedApproval.rows[0] });
+    } catch (error) {
+        console.error('Reject rider request error:', error);
+        res.status(500).json({ error: 'Failed to reject rider request' });
     }
 });
 

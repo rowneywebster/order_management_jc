@@ -65,18 +65,30 @@ export default function NairobiOrdersPage() {
 
   const submitAssignment = async () => {
     if (!assigning || !riderPhone) return;
+    const approvalPendingMessage =
+      'Your request has been sent to Admin Rowney for approval. You will receive a WhatsApp message once approved. Thank you!';
     try {
-      await axios.post(`${API_URL}/api/nairobi-orders/${assigning.id}/assign`, {
+      const response = await axios.post(`${API_URL}/api/nairobi-orders/${assigning.id}/assign`, {
         rider_phone: riderPhone,
         rider_name: riderName || undefined,
       });
+      if (response?.data?.pending) {
+        setError(approvalPendingMessage);
+      }
       setAssigning(null);
       setRiderPhone('');
       setRiderName('');
       await fetchOrders();
     } catch (err) {
       console.error('Error assigning Nairobi order:', err);
-      setError(err.response?.data?.error || 'Failed to assign order.');
+      if (err.response?.data?.pending) {
+        setError(approvalPendingMessage);
+      } else {
+        setError(err.response?.data?.error || 'Failed to assign order.');
+      }
+      setAssigning(null);
+      setRiderPhone('');
+      setRiderName('');
     }
   };
 
