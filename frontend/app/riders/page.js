@@ -11,13 +11,31 @@ export default function RidersPage() {
   const [riders, setRiders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [approvals, setApprovals] = useState([]);
+  const [approvalsLoading, setApprovalsLoading] = useState(true);
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetchRiders();
+    fetchApprovals();
   }, []);
+
+  const fetchApprovals = async () => {
+    setApprovalsLoading(true);
+    try {
+      const response = await axios.get(`${API_URL}/api/rider-approvals`);
+      setApprovals(response.data || []);
+      setError('');
+    } catch (err) {
+      console.error('Error fetching approvals:', err);
+      setError(err.response?.data?.error || 'Failed to load rider approval requests.');
+    } finally {
+      setApprovalsLoading(false);
+    }
+  };
 
   const fetchRiders = async () => {
     setLoading(true);
@@ -70,6 +88,34 @@ export default function RidersPage() {
     }
   };
 
+  const approveRequest = async (id) => {
+    try {
+      await axios.post(`${API_URL}/api/rider-approvals/${id}/approve`);
+      setSuccess('Request approved. Rider notified and assignment sent.');
+      setError('');
+      await Promise.all([fetchApprovals(), fetchRiders()]);
+    } catch (err) {
+      console.error('Error approving rider request:', err);
+      setError(err.response?.data?.error || 'Failed to approve request.');
+      setSuccess('');
+    }
+  };
+
+  const rejectRequest = async (id) => {
+    const notes = prompt('Add rejection notes (optional):');
+    if (notes === null) return;
+    try {
+      await axios.post(`${API_URL}/api/rider-approvals/${id}/reject`, { notes: notes || undefined });
+      setSuccess('Request rejected.');
+      setError('');
+      await fetchApprovals();
+    } catch (err) {
+      console.error('Error rejecting rider request:', err);
+      setError(err.response?.data?.error || 'Failed to reject request.');
+      setSuccess('');
+    }
+  };
+
   return (
     <ProtectedRoute allowedRoles={['admin']}>
     <Layout title="Riders">
@@ -84,6 +130,74 @@ export default function RidersPage() {
         {error && (
           <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-red-700">{error}</div>
         )}
+        {success && (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-emerald-800">{success}</div>
+        )}
+
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-lg font-semibold text-gray-900">Pending Approval Requests</h3>
+              <p className="text-sm text-gray-500">Approve or reject Nairobi rider claims.</p>
+            </div>
+            <span className="text-sm text-gray-600">
+              {approvals.length} pending
+            </span>
+          </div>
+          <div className="overflow-x-auto border border-gray-200 rounded-xl">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Rider</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Phone</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Product</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Address</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Requested</th>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {approvalsLoading ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-6 text-center text-gray-500">Loading requests…</td>
+                  </tr>
+                ) : approvals.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="px-6 py-6 text-center text-gray-500">No pending requests.</td>
+                  </tr>
+                ) : (
+                  approvals.map((request) => (
+                    <tr key={request.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 text-sm text-gray-900 font-semibold">{request.rider_name || 'N/A'}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{request.rider_phone}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{request.product}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{request.customer_first_name}</td>
+                      <td className="px-4 py-3 text-sm text-gray-900">{request.address}</td>
+                      <td className="px-4 py-3 text-sm text-gray-600">
+                        {request.requested_at ? new Date(request.requested_at).toLocaleString('en-KE') : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-sm whitespace-nowrap space-x-2">
+                        <button
+                          onClick={() => approveRequest(request.id)}
+                          className="px-3 py-1 rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 text-xs font-semibold"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          onClick={() => rejectRequest(request.id)}
+                          className="px-3 py-1 rounded-lg text-white bg-red-600 hover:bg-red-700 text-xs font-semibold"
+                        >
+                          Reject
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <input
