@@ -27,9 +27,24 @@ const client = new Client({
     authStrategy: new LocalAuth({
         dataPath: './whatsapp-session'
     }),
+    // Updated Puppeteer configuration for container stability
     puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins',
+            '--disable-site-isolation-trials',
+            '--disable-blink-features=AutomationControlled'
+        ]
     }
 });
 
@@ -49,6 +64,26 @@ client.on('authenticated', () => {
 
 client.on('auth_failure', () => {
     console.error('❌ WhatsApp authentication failed');
+});
+
+// Stability and logging handlers
+client.on('loading_screen', (percent, message) => {
+    console.log(`⏳ Loading WhatsApp: ${percent}% - ${message}`);
+});
+
+client.on('change_state', (state) => {
+    console.log(`🔄 WhatsApp state changed to: ${state}`);
+});
+
+client.on('disconnected', (reason) => {
+    console.error(`❌ WhatsApp disconnected: ${reason}`);
+    console.log('🔄 Attempting to reconnect in 5 seconds...');
+    setTimeout(() => {
+        console.log('🔄 Reinitializing WhatsApp client...');
+        client.initialize().catch(err => {
+            console.error('❌ Reconnection failed:', err.message);
+        });
+    }, 5000);
 });
 
 // Initialize client
