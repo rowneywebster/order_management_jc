@@ -13,6 +13,9 @@ export default function RescheduledOrders() {
   const [loading, setLoading] = useState(true);
   const [rescheduleOrder, setRescheduleOrder] = useState(null);
   const [rescheduleDate, setRescheduleDate] = useState('');
+  const [rescheduleNotes, setRescheduleNotes] = useState('');
+  const [commentOrder, setCommentOrder] = useState(null);
+  const [commentText, setCommentText] = useState('');
 
   useEffect(() => {
     fetchRescheduledOrders();
@@ -30,15 +33,19 @@ export default function RescheduledOrders() {
     }
   };
 
-  const updateOrderStatus = async (orderId, status, newDate = null) => {
+  const updateOrderStatus = async (orderId, status, newDate = null, notes = undefined) => {
     try {
       await axios.patch(`${API_URL}/api/orders/${orderId}`, {
         status,
         ...(newDate && { rescheduled_date: newDate }),
+        ...(notes !== undefined ? { notes } : {}),
       });
       fetchRescheduledOrders();
       setRescheduleOrder(null);
       setRescheduleDate('');
+      setRescheduleNotes('');
+      setCommentOrder(null);
+      setCommentText('');
     } catch (error) {
       console.error('Error updating order:', error);
       alert('Failed to update order');
@@ -120,7 +127,12 @@ export default function RescheduledOrders() {
                           {order.phone}
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-900">
-                          {order.county}
+                          <div>{order.county}</div>
+                          {order.notes && (
+                            <div className="text-xs text-gray-500 mt-1 line-clamp-2">
+                              {order.notes}
+                            </div>
+                          )}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <div className="flex gap-2">
@@ -128,10 +140,20 @@ export default function RescheduledOrders() {
                               onClick={() => {
                                 setRescheduleOrder(order);
                                 setRescheduleDate(order.rescheduled_date ? order.rescheduled_date.split('T')[0] : '');
+                                setRescheduleNotes(order.notes || '');
                               }}
                               className="text-blue-600 hover:text-blue-900 font-medium"
                             >
                               Reschedule
+                            </button>
+                            <button
+                              onClick={() => {
+                                setCommentOrder(order);
+                                setCommentText(order.notes || '');
+                              }}
+                              className="text-gray-600 hover:text-gray-900 font-medium"
+                            >
+                              Comments
                             </button>
                             <button
                               onClick={() => updateOrderStatus(order.id, 'approved')}
@@ -167,13 +189,20 @@ export default function RescheduledOrders() {
               value={rescheduleDate}
               onChange={(e) => setRescheduleDate(e.target.value)}
               min={new Date().toISOString().split('T')[0]}
+                className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
+              />
+            <textarea
+              value={rescheduleNotes}
+              onChange={(e) => setRescheduleNotes(e.target.value)}
+              rows={4}
               className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
+              placeholder="Add or update comments for this order..."
             />
             <div className="flex gap-4">
               <button
                 onClick={() => {
                   if (rescheduleDate) {
-                    updateOrderStatus(rescheduleOrder.id, 'rescheduled', rescheduleDate);
+                    updateOrderStatus(rescheduleOrder.id, 'rescheduled', rescheduleDate, rescheduleNotes);
                   }
                 }}
                 disabled={!rescheduleDate}
@@ -189,6 +218,40 @@ export default function RescheduledOrders() {
                 className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {commentOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md w-full shadow-xl">
+            <h3 className="text-xl font-bold mb-4">Order Comments</h3>
+            <p className="text-gray-600 mb-4">
+              Order: {commentOrder.product_name} - {commentOrder.customer_name}
+            </p>
+            <textarea
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              rows={5}
+              className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
+              placeholder="Add your comments or updates for this order..."
+            />
+            <div className="flex gap-4">
+              <button
+                onClick={() => updateOrderStatus(commentOrder.id, commentOrder.status, null, commentText)}
+                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setCommentOrder(null);
+                  setCommentText('');
+                }}
+                className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
+              >
+                Close
               </button>
             </div>
           </div>
