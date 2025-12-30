@@ -39,6 +39,8 @@ export default function OrdersPage() {
   const [completeOrder, setCompleteOrder] = useState(null);
   const [amount, setAmount] = useState('');
   const [statusFilter, setStatusFilter] = useState(null);
+  const [commentOrder, setCommentOrder] = useState(null);
+  const [commentText, setCommentText] = useState('');
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
@@ -106,6 +108,19 @@ export default function OrdersPage() {
     } catch (err) {
       console.error('Error updating order:', err);
       setError(err.response?.data?.error || 'Unable to update order right now.');
+    }
+  };
+
+  const updateOrderNotes = async (orderId, notes) => {
+    try {
+      await axios.patch(`${API_URL}/api/orders/${orderId}`, { notes });
+      await fetchOrders();
+      setCommentOrder(null);
+      setCommentText('');
+      setError('');
+    } catch (err) {
+      console.error('Error updating notes:', err);
+      setError(err.response?.data?.error || 'Unable to update comments right now.');
     }
   };
 
@@ -226,7 +241,7 @@ export default function OrdersPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <div className="flex flex-wrap gap-2">
-                        {order.status === 'pending' && (
+                        {(order.status === 'pending' || order.status === 'rescheduled') && (
                           <>
                             <button
                               onClick={() => setCompleteOrder(order)}
@@ -235,7 +250,10 @@ export default function OrdersPage() {
                               Complete
                             </button>
                             <button
-                              onClick={() => setSelectedOrder(order)}
+                              onClick={() => {
+                                setSelectedOrder(order);
+                                setRescheduleDate(order.rescheduled_date ? order.rescheduled_date.split('T')[0] : '');
+                              }}
                               className="text-blue-600 hover:text-blue-900 font-medium"
                             >
                               Reschedule
@@ -248,6 +266,15 @@ export default function OrdersPage() {
                             </button>
                           </>
                         )}
+                        <button
+                          onClick={() => {
+                            setCommentOrder(order);
+                            setCommentText(order.notes || '');
+                          }}
+                          className="text-gray-600 hover:text-gray-900 font-medium"
+                        >
+                          Comments
+                        </button>
                         {isAdmin && (
                           <Link
                             href={`/orders/${order.id}/edit`}
@@ -374,6 +401,42 @@ export default function OrdersPage() {
                 className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Comments Modal */}
+      {commentOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md w-full shadow-xl">
+            <h3 className="text-xl font-bold mb-4">Order Comments</h3>
+            <p className="text-gray-600 mb-4">
+              Order: {commentOrder.product_name} - {commentOrder.customer_name}
+            </p>
+            <textarea
+              value={commentText}
+              onChange={(e) => setCommentText(e.target.value)}
+              rows={5}
+              className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
+              placeholder="Add your comments or updates for this order..."
+            />
+            <div className="flex gap-4">
+              <button
+                onClick={() => updateOrderNotes(commentOrder.id, commentText)}
+                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+              >
+                Save
+              </button>
+              <button
+                onClick={() => {
+                  setCommentOrder(null);
+                  setCommentText('');
+                }}
+                className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
+              >
+                Close
               </button>
             </div>
           </div>

@@ -11,6 +11,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 export default function RescheduledOrders() {
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [rescheduleOrder, setRescheduleOrder] = useState(null);
+  const [rescheduleDate, setRescheduleDate] = useState('');
 
   useEffect(() => {
     fetchRescheduledOrders();
@@ -28,10 +30,15 @@ export default function RescheduledOrders() {
     }
   };
 
-  const updateOrderStatus = async (orderId, status) => {
+  const updateOrderStatus = async (orderId, status, newDate = null) => {
     try {
-      await axios.patch(`${API_URL}/api/orders/${orderId}`, { status });
+      await axios.patch(`${API_URL}/api/orders/${orderId}`, {
+        status,
+        ...(newDate && { rescheduled_date: newDate }),
+      });
       fetchRescheduledOrders();
+      setRescheduleOrder(null);
+      setRescheduleDate('');
     } catch (error) {
       console.error('Error updating order:', error);
       alert('Failed to update order');
@@ -118,6 +125,15 @@ export default function RescheduledOrders() {
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <div className="flex gap-2">
                             <button
+                              onClick={() => {
+                                setRescheduleOrder(order);
+                                setRescheduleDate(order.rescheduled_date ? order.rescheduled_date.split('T')[0] : '');
+                              }}
+                              className="text-blue-600 hover:text-blue-900 font-medium"
+                            >
+                              Reschedule
+                            </button>
+                            <button
                               onClick={() => updateOrderStatus(order.id, 'approved')}
                               className="text-green-600 hover:text-green-900 font-medium"
                             >
@@ -139,6 +155,45 @@ export default function RescheduledOrders() {
             </div>
           </div>
         )}
+      {rescheduleOrder && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-8 max-w-md w-full shadow-xl">
+            <h3 className="text-xl font-bold mb-4">Reschedule Order</h3>
+            <p className="text-gray-600 mb-4">
+              Order: {rescheduleOrder.product_name} - {rescheduleOrder.customer_name}
+            </p>
+            <input
+              type="date"
+              value={rescheduleDate}
+              onChange={(e) => setRescheduleDate(e.target.value)}
+              min={new Date().toISOString().split('T')[0]}
+              className="w-full border border-gray-300 rounded-lg px-4 py-2 mb-4"
+            />
+            <div className="flex gap-4">
+              <button
+                onClick={() => {
+                  if (rescheduleDate) {
+                    updateOrderStatus(rescheduleOrder.id, 'rescheduled', rescheduleDate);
+                  }
+                }}
+                disabled={!rescheduleDate}
+                className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                Confirm
+              </button>
+              <button
+                onClick={() => {
+                  setRescheduleOrder(null);
+                  setRescheduleDate('');
+                }}
+                className="flex-1 bg-gray-100 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-200"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Layout>
     </ProtectedRoute>
   );
