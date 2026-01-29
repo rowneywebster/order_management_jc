@@ -19,6 +19,7 @@ export default function Layout({ title, children }) {
   const navLinks = [
     { href: '/', label: 'Dashboard', roles: ['admin'] },
     { href: '/orders', label: 'Orders', roles: ['admin', 'user'] },
+    { href: '/approved-parcels', label: 'Approved Parcels', roles: ['admin', 'user'] },
     { href: '/inventory', label: 'Inventory', roles: ['admin'] },
     { href: '/expenses', label: 'Expenses', roles: ['admin'] },
     { href: '/performance', label: 'Performance', roles: ['admin'] },
