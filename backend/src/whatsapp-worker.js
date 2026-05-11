@@ -48,6 +48,8 @@ const client = new Client({
     }
 });
 
+let isClientReady = false;
+
 // QR code for authentication
 client.on('qr', (qr) => {
     console.log('📱 Scan this QR code with WhatsApp:');
@@ -56,6 +58,7 @@ client.on('qr', (qr) => {
 
 client.on('ready', () => {
     console.log('✅ WhatsApp client is ready!');
+    isClientReady = true;
 });
 
 client.on('authenticated', () => {
@@ -76,6 +79,7 @@ client.on('change_state', (state) => {
 });
 
 client.on('disconnected', (reason) => {
+    isClientReady = false;
     console.error(`❌ WhatsApp disconnected: ${reason}`);
     console.log('🔄 Attempting to reconnect in 5 seconds...');
     setTimeout(() => {
@@ -108,6 +112,9 @@ function formatWhatsAppNumber(phone) {
 }
 
 async function sendMessageToRecipients(message, recipients) {
+    if (!isClientReady) {
+        throw new Error('WhatsApp client is not ready — job will be retried');
+    }
     for (const rawNumber of recipients) {
         try {
             const formattedNumber = formatWhatsAppNumber(rawNumber);
